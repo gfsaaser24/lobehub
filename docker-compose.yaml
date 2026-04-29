@@ -1,0 +1,101 @@
+services:
+  lobechat:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      - SERVICE_FQDN_LOBECHAT_3210
+      - 'KEY_VAULTS_SECRET=${KEY_VAULTS_SECRET}'
+      - 'AUTH_SECRET=${AUTH_SECRET}'
+      - 'JWKS_KEY=${JWKS_KEY}'
+      - 'AUTH_ALLOWED_EMAILS=${AUTH_ALLOWED_EMAILS}'
+      - 'DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgresql:5432/${LOBE_DB_NAME}'
+      - 'APP_URL=${SERVICE_URL_LOBECHAT}'
+      - 'INTERNAL_APP_URL=http://localhost:3210'
+      - 'S3_ENDPOINT=http://rustfs:9000'
+      - 'S3_PUBLIC_DOMAIN=${SERVICE_URL_RUSTFS}'
+      - 'S3_BUCKET=${RUSTFS_LOBE_BUCKET}'
+      - S3_ENABLE_PATH_STYLE=1
+      - 'S3_ACCESS_KEY=${RUSTFS_ACCESS_KEY}'
+      - 'S3_ACCESS_KEY_ID=${RUSTFS_ACCESS_KEY}'
+      - 'S3_SECRET_ACCESS_KEY=${RUSTFS_SECRET_KEY}'
+      - LLM_VISION_IMAGE_USE_BASE64=1
+      - S3_SET_ACL=0
+      - 'SEARXNG_URL=http://searxng:8080'
+      - 'REDIS_URL=redis://redis:6379'
+      - REDIS_PREFIX=lobechat
+      - REDIS_TLS=0
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rustfs:
+        condition: service_healthy
+      rustfs-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  postgresql:
+    image: paradedb/paradedb:latest-pg17
+    environment:
+      - 'POSTGRES_DB=${LOBE_DB_NAME}'
+      - POSTGRES_USER=postgres
+      - 'POSTGRES_PASSWORD=${POSTGRES_PASSWORD}'
+    volumes:
+      - 'lobe-postgres-data:/var/lib/postgresql/data'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    command: redis-server --save 60 1000 --appendonly yes
+    volumes:
+      - 'lobe-redis-data:/data'
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    restart: unless-stopped
+
+  rustfs:
+    image: rustfs/rustfs:latest
+    environment:
+      - SERVICE_FQDN_RUSTFS_9000
+      - RUSTFS_CONSOLE_ENABLE=true
+      - 'RUSTFS_ACCESS_KEY=${RUSTFS_ACCESS_KEY}'
+      - 'RUSTFS_SECRET_KEY=${RUSTFS_SECRET_KEY}'
+    volumes:
+      - 'lobe-rustfs-data:/data'
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -qO- http://localhost:9000/health >/dev/null 2>&1 || exit 1']
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    command: ['--access-key', '${RUSTFS_ACCESS_KEY}', '--secret-key', '${RUSTFS_SECRET_KEY}', '/data']
+    restart: unless-stopped
+
+  rustfs-init:
+    image: minio/mc:latest
+    depends_on:
+      rustfs:
+        condition: service_healthy
+    entrypoint: /bin/sh
+    command:
+      - '-c'
+      - 'set -eux; mc alias set rustfs "http://rustfs:9000" "${RUSTFS_ACCESS_KEY}" "${RUSTFS_SECRET_KEY}"; mc mb "rustfs/${RUSTFS_LOBE_BUCKET}" --ignore-existing; mc anonymous set download "rustfs/${RUSTFS_LOBE_BUCKET}"'
+    restart: 'no'
+
+  searxng:
+    image: searxng/searxng:latest
+    restart: unless-stopped
+
+volumes:
+  lobe-postgres-data:
+  lobe-redis-data:
+  lobe-rustfs-data:
