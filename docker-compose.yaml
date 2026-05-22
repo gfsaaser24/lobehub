@@ -12,7 +12,7 @@ services:
       - 'DATABASE_URL=postgresql://postgres:${POSTGRES_PASSWORD}@postgresql:5432/${LOBE_DB_NAME}'
       - 'APP_URL=${SERVICE_URL_LOBECHAT}'
       - 'INTERNAL_APP_URL=http://localhost:3210'
-      - 'S3_ENDPOINT=http://rustfs:9000'
+      - 'S3_ENDPOINT=${SERVICE_URL_RUSTFS}'
       - 'S3_PUBLIC_DOMAIN=${SERVICE_URL_RUSTFS}'
       - 'S3_BUCKET=${RUSTFS_LOBE_BUCKET}'
       - S3_ENABLE_PATH_STYLE=1
