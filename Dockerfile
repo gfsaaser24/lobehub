@@ -46,8 +46,8 @@ ENV NEXT_PUBLIC_BASE_PATH="${NEXT_PUBLIC_BASE_PATH}" \
 ENV APP_URL="http://app.com" \
     DATABASE_DRIVER="node" \
     DATABASE_URL="postgres://postgres:password@localhost:5432/postgres" \
-    KEY_VAULTS_SECRET="use-for-build" \
-    AUTH_SECRET="use-for-build"
+    KEY_VAULTS_SECRET="use-for-build-placeholder-not-a-real-secret" \
+    AUTH_SECRET="use-for-build-placeholder-not-a-real-secret"
 
 # Sentry
 ENV NEXT_PUBLIC_SENTRY_DSN="${NEXT_PUBLIC_SENTRY_DSN}" \
