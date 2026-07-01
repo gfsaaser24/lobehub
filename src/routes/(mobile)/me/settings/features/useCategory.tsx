@@ -15,11 +15,13 @@ import {
   PaletteIcon,
   Sparkles,
   UserCircle,
+  UsersRound,
 } from 'lucide-react';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { type CellProps } from '@/components/Cell';
+import { useIsTeamAdmin } from '@/features/TeamAdmin/hooks';
 import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
 import { SettingsTabs } from '@/store/global/initialState';
 import {
@@ -53,6 +55,8 @@ export const useCategory = (): CategoryGroup[] => {
   const { hideDocs, showApiKeyManage, showProvider } = useServerConfigStore(featureFlagsSelectors);
   const enableBusinessFeatures = useServerConfigStore(serverConfigSelectors.enableBusinessFeatures);
   const isDevMode = useUserStore((s) => userGeneralSettingsSelectors.config(s).isDevMode);
+  // Fork feature: team admin tab, only visible for admins (hidden while loading)
+  const { isAdmin: isTeamAdmin } = useIsTeamAdmin();
 
   return useMemo(() => {
     const navigateTo = (key: SettingsTabs) =>
@@ -117,6 +121,8 @@ export const useCategory = (): CategoryGroup[] => {
     ].filter((item): item is CategoryItem => Boolean(item));
 
     const system: CategoryItem[] = [
+      isTeamAdmin &&
+        makeItem({ icon: UsersRound, key: SettingsTabs.Team, label: t('setting:tab.team') }),
       makeItem({ icon: Database, key: SettingsTabs.Storage, label: t('setting:tab.storage') }),
       isDevMode &&
         makeItem({ icon: KeyIcon, key: SettingsTabs.APIKey, label: t('auth:tab.apikey') }),
@@ -138,5 +144,14 @@ export const useCategory = (): CategoryGroup[] => {
       { items: agent, key: SettingsGroupKey.Agent, title: t('setting:group.aiConfig') },
       { items: system, key: SettingsGroupKey.System, title: t('setting:group.system') },
     ].filter((group) => group.items.length > 0);
-  }, [t, enableBusinessFeatures, hideDocs, showApiKeyManage, showProvider, isDevMode, navigate]);
+  }, [
+    t,
+    enableBusinessFeatures,
+    hideDocs,
+    showApiKeyManage,
+    showProvider,
+    isDevMode,
+    isTeamAdmin,
+    navigate,
+  ]);
 };

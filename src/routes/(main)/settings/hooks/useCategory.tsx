@@ -22,10 +22,12 @@ import {
   PaletteIcon,
   Sparkles,
   TerminalSquare,
+  UsersRound,
 } from 'lucide-react';
 import { useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useIsTeamAdmin } from '@/features/TeamAdmin/hooks';
 import { useElectronStore } from '@/store/electron';
 import { electronSyncSelectors } from '@/store/electron/selectors';
 import { SettingsTabs } from '@/store/global/initialState';
@@ -71,6 +73,8 @@ export const useCategory = () => {
   ]);
   const remoteServerUrl = useElectronStore(electronSyncSelectors.remoteServerUrl);
   const isDevMode = useUserStore((s) => userGeneralSettingsSelectors.config(s).isDevMode);
+  // Fork feature: team admin tab, only visible for admins (hidden while loading)
+  const { isAdmin: isTeamAdmin } = useIsTeamAdmin();
 
   const avatarUrl = useMemo(() => {
     if (!avatar) return undefined;
@@ -191,6 +195,11 @@ export const useCategory = () => {
 
     // System group
     const systemItems: CategoryItem[] = [
+      isTeamAdmin && {
+        icon: UsersRound,
+        key: SettingsTabs.Team,
+        label: t('tab.team'),
+      },
       isDesktop && {
         icon: EthernetPort,
         key: SettingsTabs.Proxy,
@@ -240,6 +249,7 @@ export const useCategory = () => {
     showApiKeyManage,
     showProvider,
     isDevMode,
+    isTeamAdmin,
     avatarUrl,
     username,
   ]);
