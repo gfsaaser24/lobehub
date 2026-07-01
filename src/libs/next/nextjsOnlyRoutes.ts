@@ -8,6 +8,7 @@ export const nextjsOnlyRoutes = ['/discover'];
 export const authSpaRoutes = [
   '/signin',
   '/signup',
+  '/invite',
   '/auth-error',
   '/reset-password',
   '/verify-email',
