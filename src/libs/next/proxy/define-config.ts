@@ -201,6 +201,9 @@ export function defineConfig() {
     '/auth-error',
     '/verify-email',
     '/reset-password',
+    // Team mode (fork): public invite landing — the invitee has no session
+    // yet by definition; the token in the URL is the capability.
+    '/join(.*)',
     // oauth
     // Make only the consent view public (GET page), not other oauth paths
     '/oauth/consent/(.*)',

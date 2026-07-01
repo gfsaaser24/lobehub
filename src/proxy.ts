@@ -46,6 +46,9 @@ export const config = {
 
     '/signup(.*)',
     '/signin(.*)',
+    // Team mode (fork): public invite landing (`/join/<token>`) — must be
+    // matched here or the auth-SPA rewrite in define-config never runs.
+    '/join(.*)',
     '/verify-email(.*)',
     '/verify-im(.*)',
     '/verify/(.*)',
