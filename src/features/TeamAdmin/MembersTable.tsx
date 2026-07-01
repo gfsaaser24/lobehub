@@ -1,7 +1,8 @@
 'use client';
 
 import { type TeamMemberDisplay, type UserModelPolicy } from '@lobechat/types';
-import { Avatar, Button, Flexbox, Tag, Text } from '@lobehub/ui';
+import { Avatar, Flexbox, Tag, Text } from '@lobehub/ui';
+import { Button } from '@lobehub/ui/base-ui';
 import type { TableColumnsType } from 'antd';
 import { App, Modal, Popconfirm, Table } from 'antd';
 import { createStaticStyles } from 'antd-style';
@@ -12,8 +13,8 @@ import { teamService } from '@/services/team';
 import { useUserStore } from '@/store/user';
 import { userProfileSelectors } from '@/store/user/selectors';
 
-import ModelAccessEditor from './ModelAccessEditor';
 import { useTeamMembers } from './hooks';
+import ModelAccessEditor from './ModelAccessEditor';
 import { summarizePolicy } from './utils';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({

@@ -1,3 +1,5 @@
+import { TEAM_INVITE_TOKEN_HEADER } from '@lobechat/const';
+import { headersToRecord } from '@lobechat/fetch-sse/headers';
 import { Form } from 'antd';
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -59,11 +61,27 @@ export const useSignUp = () => {
       const username = values.email.split('@')[0];
       const fetchOptions = await getFetchOptions();
 
+      // Team mode (fork): thread the invite token from `/signup?invite=...` to
+      // the server as a custom header (mirrors withCaptchaToken). The
+      // email-whitelist before-hook requires this token — not just a matching
+      // email — before letting a non-whitelisted address sign up.
+      const inviteToken = searchParams.get('invite');
+      const withInviteToken = (options?: AuthFetchOptions): AuthFetchOptions | undefined =>
+        inviteToken
+          ? {
+              ...options,
+              headers: {
+                ...headersToRecord(options?.headers),
+                [TEAM_INVITE_TOKEN_HEADER]: inviteToken,
+              },
+            }
+          : options;
+
       const submit = async (nextFetchOptions?: AuthFetchOptions) =>
         signUp.email({
           callbackURL: redirectUrl,
           email: values.email,
-          fetchOptions: nextFetchOptions,
+          fetchOptions: withInviteToken(nextFetchOptions),
           name: username,
           password: values.password,
         });

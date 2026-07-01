@@ -1,7 +1,8 @@
 'use client';
 
 import { type UserModelPolicy } from '@lobechat/types';
-import { Button, copyToClipboard, Flexbox, Icon, Text } from '@lobehub/ui';
+import { copyToClipboard, Flexbox, Icon, Text } from '@lobehub/ui';
+import { Button } from '@lobehub/ui/base-ui';
 import { App, Form, Input, Modal, Select } from 'antd';
 import { createStaticStyles } from 'antd-style';
 import { CopyIcon } from 'lucide-react';
@@ -10,8 +11,8 @@ import { useTranslation } from 'react-i18next';
 
 import { teamService } from '@/services/team';
 
-import ModelAccessEditor from './ModelAccessEditor';
 import { useTeamInvites } from './hooks';
+import ModelAccessEditor from './ModelAccessEditor';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
   link: css`

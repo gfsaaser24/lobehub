@@ -138,7 +138,7 @@ export class TeamPolicyModel {
   /**
    * Stage (or clear, with `null`) the policy chosen at invite time. Staged
    * policies are keyed by invitation id and moved to the member bucket via
-   * `takeStagedInvitePolicy` + `setPolicyForUser` on acceptance.
+   * `moveStagedInvitePolicyToUser` on acceptance.
    */
   stageInvitePolicy = async (
     invitationId: string,
@@ -148,8 +148,61 @@ export class TeamPolicyModel {
   };
 
   /**
+   * Atomically move the staged policy of an invitation to a user's member
+   * policy: reads the staged bucket, deletes `staged[invitationId]` and writes
+   * `memberPolicies[userId]` in ONE settings UPDATE inside a single
+   * `SELECT ... FOR UPDATE` transaction — no window where the policy exists in
+   * neither (or both) buckets. No-op returning `null` when nothing was staged
+   * (the member bucket is left untouched). Invalidates the user's cached
+   * effective policy. Returns the moved policy.
+   */
+  moveStagedInvitePolicyToUser = async (
+    invitationId: string,
+    userId: string,
+  ): Promise<UserModelPolicy | null> => {
+    const moved = await this.db.transaction(async (tx) => {
+      const workspace = await this.selectTeamWorkspaceForUpdate(tx);
+      if (!workspace) return null;
+
+      const settings = (workspace.settings as Record<string, any> | null) ?? {};
+      const staged = { ...this.readBucket(workspace.settings, TEAM_PENDING_INVITE_POLICIES_KEY) };
+
+      const policy = staged[invitationId];
+      if (!policy) return null;
+
+      delete staged[invitationId];
+
+      const members = {
+        ...this.readBucket(workspace.settings, TEAM_MEMBER_POLICIES_KEY),
+        [userId]: policy,
+      };
+
+      await tx
+        .update(workspaces)
+        .set({
+          settings: {
+            ...settings,
+            [TEAM_MEMBER_POLICIES_KEY]: members,
+            [TEAM_PENDING_INVITE_POLICIES_KEY]: staged,
+          },
+          updatedAt: new Date(),
+        })
+        .where(eq(workspaces.id, workspace.id));
+
+      return policy;
+    });
+
+    invalidateTeamPolicyCache(userId);
+
+    return moved;
+  };
+
+  /**
    * Remove and return the staged policy for an invitation — `null` when
    * nothing was staged. "Take" semantics: a second call returns `null`.
+   *
+   * Prefer `moveStagedInvitePolicyToUser` on invite acceptance (single
+   * transaction); this is kept for compatibility.
    */
   takeStagedInvitePolicy = async (invitationId: string): Promise<UserModelPolicy | null> => {
     return this.db.transaction(async (tx) => {

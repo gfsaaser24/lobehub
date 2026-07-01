@@ -9,11 +9,21 @@
  * - `allowedModels[providerId]: string[]` → only these model ids for that provider; empty = none.
  * - Users with `users.role === 'admin'` bypass policy entirely (never filtered, never guarded).
  *
+ * SCOPE OF `allowedModels` NARROWING — CHAT ONLY:
+ * The admin policy editor can only express CHAT models, so `allowedModels`
+ * narrowing applies to chat and generateObject calls exclusively
+ * (`policyAllowsModel`). Every other call type — embeddings, image, video,
+ * ASR/transcription, TTS — is enforced at the PROVIDER level only
+ * (`policyAllowsProvider`): a narrowed-but-allowed provider keeps its
+ * embedding/image/video models, otherwise narrowed users would silently lose
+ * RAG, file upload and image generation.
+ *
  * Storage: policies live in the team workspace's `workspaces.settings` jsonb under
  * `forkTeamMemberPolicies` (keyed by userId). Policies chosen at invite time are staged under
  * `forkPendingInvitePolicies` (keyed by invitationId) and moved on acceptance.
  */
 export interface UserModelPolicy {
+  /** Chat-model narrowing only — see "SCOPE OF `allowedModels` NARROWING" above. */
   allowedModels?: Record<string, 'all' | string[]>;
   allowedProviders: 'all' | string[];
 }
@@ -21,8 +31,8 @@ export interface UserModelPolicy {
 export interface TeamMemberDisplay {
   avatar?: string | null;
   banExpires?: string | null;
-  banReason?: string | null;
   banned: boolean;
+  banReason?: string | null;
   email?: string | null;
   fullName?: string | null;
   id: string;
@@ -62,7 +72,11 @@ export const policyAllowsProvider = (
   return policy.allowedProviders.includes(providerId);
 };
 
-/** Returns true when the policy allows this provider+model pair. */
+/**
+ * Returns true when the policy allows this provider+model pair.
+ * Only meaningful for CHAT/generateObject models — non-chat call sites must
+ * use `policyAllowsProvider` instead (see `UserModelPolicy` docs).
+ */
 export const policyAllowsModel = (
   policy: UserModelPolicy | null | undefined,
   providerId: string,

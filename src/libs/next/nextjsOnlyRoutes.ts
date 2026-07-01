@@ -8,7 +8,9 @@ export const nextjsOnlyRoutes = ['/discover'];
 export const authSpaRoutes = [
   '/signin',
   '/signup',
-  '/invite',
+  // Team mode (fork): public invite landing. `/join`, NOT `/invite` — upstream
+  // reserves `/invite/*` for its cloud workspace invites.
+  '/join',
   '/auth-error',
   '/reset-password',
   '/verify-email',

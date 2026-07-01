@@ -29,6 +29,9 @@ const builtinModelsByProvider: Record<string, any[]> = {
   openai: [
     { abilities: {}, enabled: true, id: 'gpt-4', type: 'chat' },
     { abilities: {}, enabled: true, id: 'gpt-5', type: 'chat' },
+    // non-chat models: `allowedModels` narrowing must never drop these
+    { abilities: {}, enabled: true, id: 'text-embedding-3-small', type: 'embedding' },
+    { abilities: {}, enabled: true, id: 'gpt-image-1', type: 'image' },
   ],
 };
 
@@ -103,10 +106,10 @@ describe('AiInfraRepos — team policy filtering', () => {
 
       const result = await repo.getEnabledModels();
 
-      expect(result).toHaveLength(4);
+      expect(result).toHaveLength(6);
     });
 
-    it('drops models of disallowed providers', async () => {
+    it('drops models of disallowed providers (every model type)', async () => {
       await teamPolicyModel.setPolicyForUser(memberId, { allowedProviders: ['openai'] });
       const repo = createRepo(memberId);
 
@@ -115,10 +118,12 @@ describe('AiInfraRepos — team policy filtering', () => {
       expect(result.map((m) => `${m.providerId}:${m.id}`).sort()).toEqual([
         'openai:gpt-4',
         'openai:gpt-5',
+        'openai:gpt-image-1',
+        'openai:text-embedding-3-small',
       ]);
     });
 
-    it('narrows models within an allowed provider via allowedModels', async () => {
+    it('narrows CHAT models within an allowed provider via allowedModels', async () => {
       await teamPolicyModel.setPolicyForUser(memberId, {
         allowedModels: { openai: ['gpt-4'] },
         allowedProviders: 'all',
@@ -127,11 +132,31 @@ describe('AiInfraRepos — team policy filtering', () => {
 
       const result = await repo.getEnabledModels();
 
-      // anthropic has no allowedModels entry → every model allowed
+      // anthropic has no allowedModels entry → every model allowed;
+      // openai's embedding/image models survive the chat-only narrowing
       expect(result.map((m) => `${m.providerId}:${m.id}`).sort()).toEqual([
         'anthropic:claude-haiku-4-5',
         'anthropic:claude-sonnet-4-5',
         'openai:gpt-4',
+        'openai:gpt-image-1',
+        'openai:text-embedding-3-small',
+      ]);
+    });
+
+    it('a narrowed provider still exposes its embedding and image models (chat-only narrowing)', async () => {
+      // even an EMPTY chat allowlist must not hide non-chat models — they back
+      // RAG, file upload and image gen
+      await teamPolicyModel.setPolicyForUser(memberId, {
+        allowedModels: { openai: [] },
+        allowedProviders: ['openai'],
+      });
+      const repo = createRepo(memberId);
+
+      const result = await repo.getEnabledModels();
+
+      expect(result.map((m) => `${m.providerId}:${m.id}`).sort()).toEqual([
+        'openai:gpt-image-1',
+        'openai:text-embedding-3-small',
       ]);
     });
 
@@ -151,14 +176,15 @@ describe('AiInfraRepos — team policy filtering', () => {
       await teamPolicyModel.setPolicyForUser(adminId, { allowedProviders: [] });
       const repo = createRepo(adminId);
 
-      expect(await repo.getEnabledModels()).toHaveLength(4);
+      expect(await repo.getEnabledModels()).toHaveLength(6);
     });
   });
 
   describe('getAiProviderRuntimeState', () => {
     it('derives the enabled provider/model lists from policy-filtered inputs', async () => {
-      // anthropic is an allowed provider but every model of it is denied — it
-      // must drop out of enabledChatAiProviders too.
+      // anthropic is an allowed provider but every chat model of it is denied —
+      // it must drop out of enabledChatAiProviders too (it has no non-chat
+      // models to keep it anywhere else).
       await teamPolicyModel.setPolicyForUser(memberId, {
         allowedModels: { anthropic: [] },
         allowedProviders: 'all',
@@ -171,8 +197,15 @@ describe('AiInfraRepos — team policy filtering', () => {
 
       const result = await repo.getAiProviderRuntimeState();
 
-      expect(result.enabledAiModels.map((m) => m.id).sort()).toEqual(['gpt-4', 'gpt-5']);
+      expect(result.enabledAiModels.map((m) => m.id).sort()).toEqual([
+        'gpt-4',
+        'gpt-5',
+        'gpt-image-1',
+        'text-embedding-3-small',
+      ]);
       expect(result.enabledChatAiProviders.map((p) => p.id)).toEqual(['openai']);
+      // non-chat capabilities of allowed providers stay intact
+      expect(result.enabledImageAiProviders.map((p) => p.id)).toEqual(['openai']);
     });
   });
 });

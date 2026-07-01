@@ -10,9 +10,9 @@ import { and, eq, isNull, or } from 'drizzle-orm';
 import urlJoin from 'url-join';
 import { z } from 'zod';
 
-import { TeamPolicyModel, invalidateTeamPolicyCache } from '@/database/models/teamPolicy';
+import { invalidateTeamPolicyCache, TeamPolicyModel } from '@/database/models/teamPolicy';
 import { WorkspaceMemberModel } from '@/database/models/workspaceMember';
-import { session, users, workspaceMembers, workspaces } from '@/database/schemas';
+import { users, workspaceMembers, workspaces } from '@/database/schemas';
 import { appEnv } from '@/envs/app';
 import { authedProcedure, router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
@@ -138,13 +138,18 @@ export const teamRouter = router({
     const stale = invitations.filter((invitation) => invitation.expiresAt <= now);
     const pending = invitations.filter((invitation) => invitation.expiresAt > now);
 
-    // Opportunistically flag stale invitations so they stop matching `status = 'pending'`
+    // Opportunistically flag stale invitations so they stop matching `status = 'pending'`,
+    // and release their staged policies so they can never be picked up by a
+    // future acceptance (mirrors `revokeInvite`).
     if (stale.length > 0) {
       await Promise.all(
         stale.map((invitation) =>
           ctx.workspaceMemberModel.updateInvitationStatus(invitation.id, 'expired'),
         ),
       );
+      for (const invitation of stale) {
+        await ctx.teamPolicyModel.stageInvitePolicy(invitation.id, null);
+      }
     }
 
     return pending
@@ -241,6 +246,11 @@ export const teamRouter = router({
   setUserPolicy: adminProcedure
     .input(z.object({ policy: userModelPolicySchema.nullable(), userId: z.string() }))
     .mutation(async ({ ctx, input }) => {
+      // The team workspace only exists after the first invite; setting a policy
+      // on a pre-existing user must not require an invite to have ever been
+      // created. Idempotent find-or-create.
+      await ctx.teamPolicyModel.ensureTeamWorkspace(ctx.userId);
+
       await ctx.teamPolicyModel.setPolicyForUser(input.userId, input.policy);
       invalidateTeamPolicyCache(input.userId);
 
@@ -260,8 +270,18 @@ export const teamRouter = router({
         .where(eq(users.id, input.userId));
 
       // Kill live better-auth sessions so the ban takes effect immediately,
-      // not on next session refresh.
-      await ctx.serverDB.delete(session).where(eq(session.userId, input.userId));
+      // not on next session refresh. better-auth resolves sessions from Redis
+      // secondaryStorage first (the DB `session` table is only a fallback), so
+      // a raw drizzle row delete would be dead code in production — go through
+      // better-auth's internal adapter, which clears both the Redis entries
+      // and the DB rows. Accepted gap: the session cookie cache
+      // (`session.cookieCache.maxAge = 120` in define-config) can keep an
+      // already-issued cookie valid for up to 2 minutes.
+      // Dynamic import so the lambda router doesn't instantiate better-auth
+      // (and its email/SSO wiring) at module load.
+      const { auth } = await import('@/auth');
+      const { internalAdapter } = await auth.$context;
+      await internalAdapter.deleteUserSessions(input.userId);
 
       invalidateTeamPolicyCache(input.userId);
 

@@ -140,10 +140,16 @@ describe('emailWhitelist plugin — team invitation fallback', () => {
     const plugin = emailWhitelist();
     // This plugin's init ignores the better-auth context argument
     const result = (plugin.init as () => any)();
-    return result.options.databaseHooks.user.create.before as (user: {
-      email?: string;
-    }) => Promise<{ data: { email?: string } }>;
+    return result.options.databaseHooks.user.create.before as (
+      user: { email?: string },
+      ctx?: { headers?: HeadersInit; path?: string; request?: Request } | null,
+    ) => Promise<{ data: { email?: string } }>;
   };
+
+  const signupCtx = (token?: string) => ({
+    headers: token ? new Headers({ 'x-team-invite-token': token }) : new Headers(),
+    path: '/sign-up/email',
+  });
 
   beforeEach(() => {
     vi.clearAllMocks();
@@ -155,32 +161,99 @@ describe('emailWhitelist plugin — team invitation fallback', () => {
     (authEnv as { AUTH_ALLOWED_EMAILS: string | undefined }).AUTH_ALLOWED_EMAILS = 'example.com';
   });
 
-  it('should allow a non-whitelisted email that holds a pending unexpired invitation', async () => {
-    dbMocks.limit.mockResolvedValue([{ id: 'inv_1' }]);
-    const before = getCreateBeforeHook();
+  describe('token-based validation (email/password signups)', () => {
+    it('should allow a non-whitelisted email when the invite token header matches an invitation', async () => {
+      dbMocks.limit.mockResolvedValue([{ id: 'inv_1' }]);
+      const before = getCreateBeforeHook();
 
-    await expect(before({ email: 'invited@other.com' })).resolves.toEqual({
-      data: { email: 'invited@other.com' },
+      await expect(before({ email: 'invited@other.com' }, signupCtx('tok_1'))).resolves.toEqual({
+        data: { email: 'invited@other.com' },
+      });
+      // Exactly one lookup: the token query. No email-only fallback ran.
+      expect(dbMocks.select).toHaveBeenCalledTimes(1);
     });
-    expect(dbMocks.select).toHaveBeenCalledTimes(1);
+
+    it('should read the token from plain-object headers too', async () => {
+      dbMocks.limit.mockResolvedValue([{ id: 'inv_1' }]);
+      const before = getCreateBeforeHook();
+
+      await expect(
+        before(
+          { email: 'invited@other.com' },
+          { headers: { 'x-team-invite-token': 'tok_1' }, path: '/sign-up/email' },
+        ),
+      ).resolves.toEqual({ data: { email: 'invited@other.com' } });
+      expect(dbMocks.select).toHaveBeenCalledTimes(1);
+    });
+
+    it('should block when the token matches nothing (wrong token, wrong email, expired, revoked)', async () => {
+      // The SQL restricts to token = $1 AND lower(email) = $2 AND
+      // status='pending' AND expires_at > now(), so every mismatch comes back
+      // as zero rows.
+      dbMocks.limit.mockResolvedValue([]);
+      const before = getCreateBeforeHook();
+
+      await expect(before({ email: 'invited@other.com' }, signupCtx('tok_wrong'))).rejects.toBeInstanceOf(
+        APIError,
+      );
+      // No email-only fallback once a token is supplied — the token is the capability
+      expect(dbMocks.select).toHaveBeenCalledTimes(1);
+    });
+
+    it('should require the token for email/password signups even when an email-matching invitation exists', async () => {
+      // An invitation for this email IS pending, but the signup request
+      // carries no token header — knowing the invited address must not be
+      // enough for password signups.
+      dbMocks.limit.mockResolvedValue([{ id: 'inv_1' }]);
+      const before = getCreateBeforeHook();
+
+      await expect(before({ email: 'invited@other.com' }, signupCtx())).rejects.toBeInstanceOf(
+        APIError,
+      );
+      // The email-only lookup was never attempted
+      expect(dbMocks.select).not.toHaveBeenCalled();
+    });
   });
 
-  it('should keep blocking when the lookup finds nothing (absent invitations)', async () => {
-    dbMocks.limit.mockResolvedValue([]);
-    const before = getCreateBeforeHook();
+  describe('email-only fallback (headerless non-password paths, e.g. SSO/magic link)', () => {
+    it('should allow a non-whitelisted email that holds a pending unexpired invitation', async () => {
+      dbMocks.limit.mockResolvedValue([{ id: 'inv_1' }]);
+      const before = getCreateBeforeHook();
 
-    await expect(before({ email: 'stranger@other.com' })).rejects.toBeInstanceOf(APIError);
-    expect(dbMocks.select).toHaveBeenCalledTimes(1);
-  });
+      await expect(
+        before({ email: 'invited@other.com' }, { path: '/callback/google' }),
+      ).resolves.toEqual({ data: { email: 'invited@other.com' } });
+      expect(dbMocks.select).toHaveBeenCalledTimes(1);
+    });
 
-  it('should keep blocking expired/revoked invitations (filtered out by the query itself)', async () => {
-    // The SQL restricts to status='pending' AND expires_at > now(), so expired or
-    // revoked invitations come back as zero rows — same as no invitation at all.
-    dbMocks.limit.mockResolvedValue([]);
-    const before = getCreateBeforeHook();
+    it('should fall back to email-only matching when no endpoint context exists at all', async () => {
+      // Internal creation paths invoke the hook without a request context
+      dbMocks.limit.mockResolvedValue([{ id: 'inv_1' }]);
+      const before = getCreateBeforeHook();
 
-    await expect(before({ email: 'expired-invite@other.com' })).rejects.toBeInstanceOf(APIError);
-    await expect(before({ email: 'revoked-invite@other.com' })).rejects.toBeInstanceOf(APIError);
+      await expect(before({ email: 'invited@other.com' })).resolves.toEqual({
+        data: { email: 'invited@other.com' },
+      });
+      expect(dbMocks.select).toHaveBeenCalledTimes(1);
+    });
+
+    it('should keep blocking when the lookup finds nothing (absent invitations)', async () => {
+      dbMocks.limit.mockResolvedValue([]);
+      const before = getCreateBeforeHook();
+
+      await expect(before({ email: 'stranger@other.com' })).rejects.toBeInstanceOf(APIError);
+      expect(dbMocks.select).toHaveBeenCalledTimes(1);
+    });
+
+    it('should keep blocking expired/revoked invitations (filtered out by the query itself)', async () => {
+      // The SQL restricts to status='pending' AND expires_at > now(), so expired or
+      // revoked invitations come back as zero rows — same as no invitation at all.
+      dbMocks.limit.mockResolvedValue([]);
+      const before = getCreateBeforeHook();
+
+      await expect(before({ email: 'expired-invite@other.com' })).rejects.toBeInstanceOf(APIError);
+      await expect(before({ email: 'revoked-invite@other.com' })).rejects.toBeInstanceOf(APIError);
+    });
   });
 
   it('should never hit the invitation query for whitelisted emails', async () => {
@@ -208,6 +281,18 @@ describe('emailWhitelist plugin — team invitation fallback', () => {
     const before = getCreateBeforeHook();
 
     await expect(before({ email: 'invited@other.com' })).rejects.toBeInstanceOf(APIError);
+
+    consoleError.mockRestore();
+  });
+
+  it('should stay fail-closed when the token lookup errors', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    dbMocks.limit.mockRejectedValue(new Error('db down'));
+    const before = getCreateBeforeHook();
+
+    await expect(before({ email: 'invited@other.com' }, signupCtx('tok_1'))).rejects.toBeInstanceOf(
+      APIError,
+    );
 
     consoleError.mockRestore();
   });

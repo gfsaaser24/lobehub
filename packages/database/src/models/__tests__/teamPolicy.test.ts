@@ -306,6 +306,85 @@ describe('TeamPolicyModel', () => {
     });
   });
 
+  describe('moveStagedInvitePolicyToUser', () => {
+    it('moves the staged policy into the member bucket and returns it', async () => {
+      await model.ensureTeamWorkspace(adminId);
+      await model.stageInvitePolicy('invite-1', narrowed);
+
+      const moved = await model.moveStagedInvitePolicyToUser('invite-1', memberId);
+
+      expect(moved).toEqual(narrowed);
+      expect(await model.getPolicyForUser(memberId)).toEqual(narrowed);
+      // staged entry is gone — a follow-up take/move finds nothing
+      expect(await model.takeStagedInvitePolicy('invite-1')).toBeNull();
+      expect(await model.moveStagedInvitePolicyToUser('invite-1', memberId)).toBeNull();
+    });
+
+    it('is a no-op returning null when nothing was staged', async () => {
+      await model.ensureTeamWorkspace(adminId);
+      await model.setPolicyForUser(memberId, openaiOnly);
+
+      const moved = await model.moveStagedInvitePolicyToUser('invite-unknown', memberId);
+
+      expect(moved).toBeNull();
+      // the member bucket is left untouched
+      expect(await model.getPolicyForUser(memberId)).toEqual(openaiOnly);
+    });
+
+    it('returns null when the team workspace does not exist', async () => {
+      expect(await model.moveStagedInvitePolicyToUser('invite-1', memberId)).toBeNull();
+    });
+
+    it('preserves unrelated settings keys, staged entries and member policies', async () => {
+      await serverDB.insert(workspaces).values({
+        id: 'tp-move-ws',
+        name: TEAM_WORKSPACE_NAME,
+        primaryOwnerId: adminId,
+        settings: {
+          keep: true,
+          [TEAM_MEMBER_POLICIES_KEY]: { [otherMemberId]: openaiOnly },
+          [TEAM_PENDING_INVITE_POLICIES_KEY]: { 'invite-1': narrowed, 'invite-2': openaiOnly },
+        },
+        slug: TEAM_WORKSPACE_SLUG,
+      });
+
+      await model.moveStagedInvitePolicyToUser('invite-1', memberId);
+
+      const workspace = await getTeamWorkspaceRow();
+      expect(workspace.settings).toEqual({
+        keep: true,
+        [TEAM_MEMBER_POLICIES_KEY]: { [memberId]: narrowed, [otherMemberId]: openaiOnly },
+        [TEAM_PENDING_INVITE_POLICIES_KEY]: { 'invite-2': openaiOnly },
+      });
+    });
+
+    it('updates both buckets atomically in a single settings write (post-state consistent)', async () => {
+      await model.ensureTeamWorkspace(adminId);
+      await model.stageInvitePolicy('invite-1', narrowed);
+
+      await model.moveStagedInvitePolicyToUser('invite-1', memberId);
+
+      // one row, both buckets already consistent: the policy exists exactly once
+      const workspace = await getTeamWorkspaceRow();
+      const settings = workspace.settings as Record<string, any>;
+      expect(settings[TEAM_MEMBER_POLICIES_KEY]).toEqual({ [memberId]: narrowed });
+      expect(settings[TEAM_PENDING_INVITE_POLICIES_KEY]).toEqual({});
+    });
+
+    it('invalidates the cached effective policy for the target user', async () => {
+      await model.ensureTeamWorkspace(adminId);
+      await model.stageInvitePolicy('invite-1', narrowed);
+
+      // prime the cache with "no policy"
+      expect(await model.getEffectivePolicy(memberId)).toBeNull();
+
+      await model.moveStagedInvitePolicyToUser('invite-1', memberId);
+
+      // served fresh — not the stale cached null
+      expect(await model.getEffectivePolicy(memberId)).toEqual(narrowed);
+    });
+  });
+
   describe('isUserAdmin', () => {
     it('returns true only for users.role === "admin"', async () => {
       expect(await model.isUserAdmin(adminId)).toBe(true);

@@ -100,34 +100,44 @@ describe('createTeamPolicyHooks', () => {
     });
   });
 
-  describe('beforeCreateImage / beforeCreateVideo', () => {
-    it('throws PermissionDenied for a disallowed image model', async () => {
+  describe('beforeCreateImage / beforeCreateVideo (provider-level only)', () => {
+    it('throws PermissionDenied for an image call on a disallowed provider', async () => {
+      const hooks = createTeamPolicyHooks(serverDB, memberId, 'anthropic');
+
+      await expect(
+        hooks.beforeCreateImage!({ model: 'some-image-model', params: { prompt: 'a cat' } }),
+      ).rejects.toMatchObject({
+        errorType: AgentRuntimeErrorType.PermissionDenied,
+        provider: 'anthropic',
+      });
+    });
+
+    it('throws PermissionDenied for a video call on a disallowed provider', async () => {
+      const hooks = createTeamPolicyHooks(serverDB, memberId, 'anthropic');
+
+      await expect(
+        hooks.beforeCreateVideo!({ model: 'some-video-model', params: { prompt: 'a cat' } }),
+      ).rejects.toMatchObject({
+        errorType: AgentRuntimeErrorType.PermissionDenied,
+        provider: 'anthropic',
+      });
+    });
+
+    it('image gen on an allowed provider passes even when allowedModels narrows its chat models', async () => {
+      // memberId's policy narrows openai to ['gpt-4'] — narrowing is chat-only,
+      // so image models of the allowed provider must NOT be blocked.
       const hooks = createTeamPolicyHooks(serverDB, memberId, 'openai');
 
       await expect(
         hooks.beforeCreateImage!({ model: 'gpt-image-1', params: { prompt: 'a cat' } }),
-      ).rejects.toMatchObject({
-        errorType: AgentRuntimeErrorType.PermissionDenied,
-        provider: 'openai',
-      });
+      ).resolves.toBeUndefined();
     });
 
-    it('throws PermissionDenied for a disallowed video model', async () => {
+    it('video gen on an allowed provider passes even when allowedModels narrows its chat models', async () => {
       const hooks = createTeamPolicyHooks(serverDB, memberId, 'openai');
 
       await expect(
         hooks.beforeCreateVideo!({ model: 'sora-2', params: { prompt: 'a cat' } }),
-      ).rejects.toMatchObject({
-        errorType: AgentRuntimeErrorType.PermissionDenied,
-        provider: 'openai',
-      });
-    });
-
-    it('passes through allowed models', async () => {
-      const hooks = createTeamPolicyHooks(serverDB, memberId, 'openai');
-
-      await expect(
-        hooks.beforeCreateImage!({ model: 'gpt-4', params: { prompt: 'a cat' } }),
       ).resolves.toBeUndefined();
     });
   });
@@ -141,15 +151,24 @@ describe('createTeamPolicyHooks', () => {
       ).resolves.toBeUndefined();
     });
 
-    it('throws PermissionDenied for a disallowed embeddings model', async () => {
+    it('embeddings on an allowed provider pass even when allowedModels narrows its chat models', async () => {
+      // provider-level check only — otherwise narrowed users silently lose RAG
       const hooks = createTeamPolicyHooks(serverDB, memberId, 'openai');
 
       await expect(
         hooks.beforeEmbeddings!({ input: 'hello', model: 'text-embedding-3-small' }),
+      ).resolves.toBeUndefined();
+    });
+
+    it('throws PermissionDenied for embeddings on a disallowed provider', async () => {
+      const hooks = createTeamPolicyHooks(serverDB, memberId, 'anthropic');
+
+      await expect(
+        hooks.beforeEmbeddings!({ input: 'hello', model: 'voyage-3' }),
       ).rejects.toMatchObject({ errorType: AgentRuntimeErrorType.PermissionDenied });
     });
 
-    it('throws PermissionDenied for a disallowed generateObject model', async () => {
+    it('throws PermissionDenied for a disallowed generateObject model (chat-level narrowing)', async () => {
       const hooks = createTeamPolicyHooks(serverDB, memberId, 'openai');
 
       await expect(

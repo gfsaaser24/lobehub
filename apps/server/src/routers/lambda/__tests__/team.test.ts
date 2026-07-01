@@ -6,9 +6,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { getServerDB } from '@/database/core/db-adaptor';
 import { TeamPolicyModel, invalidateTeamPolicyCache } from '@/database/models/teamPolicy';
 import { WorkspaceMemberModel } from '@/database/models/workspaceMember';
-import { session, users } from '@/database/schemas';
+import { users } from '@/database/schemas';
 
 import { teamRouter } from '../team';
+
+// suspendUser revokes sessions through better-auth's internal adapter (clears
+// Redis secondaryStorage AND the DB fallback) — mock the auth instance.
+const { deleteUserSessionsMock } = vi.hoisted(() => ({ deleteUserSessionsMock: vi.fn() }));
+
+vi.mock('@/auth', () => ({
+  auth: {
+    $context: Promise.resolve({ internalAdapter: { deleteUserSessions: deleteUserSessionsMock } }),
+  },
+}));
 
 vi.mock('@/database/core/db-adaptor', () => ({
   getServerDB: vi.fn(),
@@ -39,11 +49,9 @@ const samplePolicy: UserModelPolicy = {
 const createDBMock = () => {
   const updateWhere = vi.fn().mockResolvedValue(undefined);
   const updateSet = vi.fn(() => ({ where: updateWhere }));
-  const deleteWhere = vi.fn().mockResolvedValue(undefined);
 
   return {
     db: {
-      delete: vi.fn(() => ({ where: deleteWhere })),
       query: {
         users: { findFirst: vi.fn() },
         workspaces: { findFirst: vi.fn() },
@@ -51,7 +59,6 @@ const createDBMock = () => {
       select: vi.fn(),
       update: vi.fn(() => ({ set: updateSet })),
     },
-    deleteWhere,
     updateSet,
     updateWhere,
   };
@@ -294,13 +301,16 @@ describe('teamRouter', () => {
         'inv-stale',
         'expired',
       );
+      // stale invites also release their staged policy (mirrors revokeInvite)
+      expect(teamPolicyModel.stageInvitePolicy).toHaveBeenCalledWith('inv-stale', null);
+      expect(teamPolicyModel.stageInvitePolicy).not.toHaveBeenCalledWith('inv-live', null);
       expect(result).toEqual([
         {
           createdAt: createdAt.toISOString(),
           email: 'fresh@example.com',
           expiresAt: future.toISOString(),
           id: 'inv-live',
-          link: 'https://chat.example.test/invite/tok_live',
+          link: 'https://chat.example.test/join/tok_live',
           policy: samplePolicy,
           role: 'member',
           status: 'pending',
@@ -371,13 +381,13 @@ describe('teamRouter', () => {
         workspaceId: teamWorkspaceId,
       });
       expect(teamPolicyModel.stageInvitePolicy).toHaveBeenCalledWith('inv-new', samplePolicy);
-      expect(result.link).toBe('https://chat.example.test/invite/tok_new');
+      expect(result.link).toBe('https://chat.example.test/join/tok_new');
       expect(result.invite).toEqual({
         createdAt: invitationRow.createdAt.toISOString(),
         email: 'new@example.com',
         expiresAt: invitationRow.expiresAt.toISOString(),
         id: 'inv-new',
-        link: 'https://chat.example.test/invite/tok_new',
+        link: 'https://chat.example.test/join/tok_new',
         policy: samplePolicy,
         role: 'member',
         status: 'pending',
@@ -424,6 +434,17 @@ describe('teamRouter', () => {
       expect(result).toEqual({ success: true });
     });
 
+    it('ensures the team workspace exists before the first invite is ever created', async () => {
+      await createCaller().setUserPolicy({ policy: samplePolicy, userId: memberUserId });
+
+      expect(teamPolicyModel.ensureTeamWorkspace).toHaveBeenCalledWith(adminUserId);
+      // find-or-create runs BEFORE the policy write so the write never throws
+      // 'Team workspace not found'
+      expect(teamPolicyModel.ensureTeamWorkspace.mock.invocationCallOrder[0]).toBeLessThan(
+        teamPolicyModel.setPolicyForUser.mock.invocationCallOrder[0],
+      );
+    });
+
     it('accepts null to clear a policy', async () => {
       await createCaller().setUserPolicy({ policy: null, userId: memberUserId });
 
@@ -440,7 +461,7 @@ describe('teamRouter', () => {
       expect(db.update).not.toHaveBeenCalled();
     });
 
-    it('bans the user, kills their auth sessions and invalidates the policy cache', async () => {
+    it('bans the user, revokes their better-auth sessions and invalidates the policy cache', async () => {
       const result = await createCaller().suspendUser({
         reason: 'policy violation',
         userId: memberUserId,
@@ -448,7 +469,9 @@ describe('teamRouter', () => {
 
       expect(db.update).toHaveBeenCalledWith(users);
       expect(updateSet).toHaveBeenCalledWith({ banReason: 'policy violation', banned: true });
-      expect(db.delete).toHaveBeenCalledWith(session);
+      // revocation goes through better-auth's internal adapter so the Redis
+      // secondaryStorage entries are cleared too, not just the DB fallback rows
+      expect(deleteUserSessionsMock).toHaveBeenCalledWith(memberUserId);
       expect(vi.mocked(invalidateTeamPolicyCache)).toHaveBeenCalledWith(memberUserId);
       expect(result).toEqual({ success: true });
     });

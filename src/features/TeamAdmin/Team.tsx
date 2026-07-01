@@ -1,6 +1,7 @@
 'use client';
 
-import { Button, Flexbox, FluentEmoji, Icon } from '@lobehub/ui';
+import { Flexbox, FluentEmoji, Icon } from '@lobehub/ui';
+import { Button } from '@lobehub/ui/base-ui';
 import { UserPlusIcon } from 'lucide-react';
 import { memo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -8,10 +9,10 @@ import { useTranslation } from 'react-i18next';
 import { MAX_WIDTH } from '@/const/layoutTokens';
 import SettingHeader from '@/routes/(main)/settings/features/SettingHeader';
 
+import { useTeamContext } from './hooks';
 import InviteModal from './InviteModal';
 import InvitesSection from './InvitesSection';
 import MembersTable from './MembersTable';
-import { useTeamContext } from './hooks';
 
 const Forbidden = memo(() => {
   const { t } = useTranslation('error');

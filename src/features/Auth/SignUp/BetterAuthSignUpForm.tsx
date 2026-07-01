@@ -26,7 +26,9 @@ const BetterAuthSignUpForm = () => {
   const passwordInputRef = useRef<InputRef>(null);
 
   // Team mode (fork): arriving via an invite link locks the email to the
-  // invited address — server-side acceptance matches invitations by email.
+  // invited address. The invite token itself is threaded to the server by
+  // useSignUp (as a custom header on signUp.email) — it is the enforced
+  // capability; the locked email is just UX.
   const [inviteEmailLocked, setInviteEmailLocked] = useState(false);
 
   useEffect(() => {

@@ -12,19 +12,27 @@ interface NewUser {
 
 /**
  * Team mode (fork): accept any pending, unexpired team invitation matching a
- * freshly created user's email (case-insensitive).
+ * freshly created user's email (case-insensitive). Matching stays email-based
+ * on purpose: this `user.create.after` database hook has no guaranteed access
+ * to request headers, so it cannot see the invite token — the
+ * `email-whitelist` before-hook is the token-enforcing gate; this hook only
+ * does post-signup bookkeeping.
  *
  * Called from the better-auth `user.create.after` database hook (see
  * define-config.ts). It is deliberately total: every failure is swallowed and
  * logged so signup can never fail because of invite bookkeeping. It is also
  * idempotent — `addMember` upserts on (workspaceId, userId),
- * `updateInvitationStatus` is a plain update, and `takeStagedInvitePolicy`
- * returns null once the staged policy has been consumed.
+ * `updateInvitationStatus` is a plain update, and
+ * `moveStagedInvitePolicyToUser` is a no-op once the staged policy has been
+ * consumed.
  *
- * Per-invitation order matters: the staged policy is applied FIRST so that a
- * partial failure can never leave a member with more model access than the
- * admin intended (no policy entry means unrestricted); the invitation is only
- * marked accepted LAST, so a mid-way crash leaves it pending and retryable.
+ * Per-invitation order matters: the staged policy is moved FIRST — atomically,
+ * in a single `moveStagedInvitePolicyToUser` transaction — so a partial
+ * failure can never leave a member with more model access than the admin
+ * intended (no policy entry means unrestricted): if the move fails the member
+ * is never added, and once it succeeds the policy is already in force. The
+ * invitation is only marked accepted LAST, so a mid-way crash leaves it
+ * pending and retryable.
  */
 export const acceptTeamInviteForNewUser = async (user: NewUser): Promise<void> => {
   try {
@@ -48,8 +56,7 @@ export const acceptTeamInviteForNewUser = async (user: NewUser): Promise<void> =
 
     for (const invitation of invitations) {
       try {
-        const policy = await policyModel.takeStagedInvitePolicy(invitation.id);
-        if (policy) await policyModel.setPolicyForUser(user.id, policy);
+        await policyModel.moveStagedInvitePolicyToUser(invitation.id, user.id);
 
         await memberModel.addMember({
           role: invitation.role as 'member' | 'owner' | 'viewer',

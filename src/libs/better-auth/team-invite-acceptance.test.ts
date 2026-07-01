@@ -22,8 +22,7 @@ const memberModelMocks = vi.hoisted(() => ({
 }));
 
 const policyModelMocks = vi.hoisted(() => ({
-  setPolicyForUser: vi.fn(),
-  takeStagedInvitePolicy: vi.fn(),
+  moveStagedInvitePolicyToUser: vi.fn(),
 }));
 
 vi.mock('@lobechat/database', () => ({
@@ -57,20 +56,22 @@ describe('acceptTeamInviteForNewUser', () => {
     dbMocks.select.mockReturnValue({ from: dbMocks.from } as any);
     dbMocks.from.mockReturnValue({ where: dbMocks.where } as any);
     dbMocks.where.mockResolvedValue([]);
-    policyModelMocks.takeStagedInvitePolicy.mockResolvedValue(null);
+    policyModelMocks.moveStagedInvitePolicyToUser.mockResolvedValue(null);
   });
 
   it('should accept a pending invitation and move the staged policy', async () => {
     const policy: UserModelPolicy = { allowedProviders: ['openai'] };
     dbMocks.where.mockResolvedValue([buildInvitation()]);
-    policyModelMocks.takeStagedInvitePolicy.mockResolvedValue(policy);
+    policyModelMocks.moveStagedInvitePolicyToUser.mockResolvedValue(policy);
 
     await acceptTeamInviteForNewUser({ email: 'Invited@Other.com', id: 'user_new' });
 
     expect(WorkspaceMemberModel).toHaveBeenCalledWith({ select: dbMocks.select }, 'user_new');
     expect(TeamPolicyModel).toHaveBeenCalledWith({ select: dbMocks.select });
-    expect(policyModelMocks.takeStagedInvitePolicy).toHaveBeenCalledWith('inv_1');
-    expect(policyModelMocks.setPolicyForUser).toHaveBeenCalledWith('user_new', policy);
+    expect(policyModelMocks.moveStagedInvitePolicyToUser).toHaveBeenCalledWith(
+      'inv_1',
+      'user_new',
+    );
     expect(memberModelMocks.addMember).toHaveBeenCalledWith({
       role: 'member',
       userId: 'user_new',
@@ -79,15 +80,56 @@ describe('acceptTeamInviteForNewUser', () => {
     expect(memberModelMocks.updateInvitationStatus).toHaveBeenCalledWith('inv_1', 'accepted');
   });
 
-  it('should skip setPolicyForUser when no policy was staged', async () => {
+  it('should still add the member when no policy was staged (move returns null)', async () => {
     dbMocks.where.mockResolvedValue([buildInvitation()]);
-    policyModelMocks.takeStagedInvitePolicy.mockResolvedValue(null);
+    policyModelMocks.moveStagedInvitePolicyToUser.mockResolvedValue(null);
 
     await acceptTeamInviteForNewUser({ email: 'invited@other.com', id: 'user_new' });
 
-    expect(policyModelMocks.setPolicyForUser).not.toHaveBeenCalled();
     expect(memberModelMocks.addMember).toHaveBeenCalledTimes(1);
     expect(memberModelMocks.updateInvitationStatus).toHaveBeenCalledWith('inv_1', 'accepted');
+  });
+
+  it('should move the policy BEFORE adding the member, so a later failure cannot leave the user unrestricted', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const policy: UserModelPolicy = { allowedProviders: ['openai'] };
+    dbMocks.where.mockResolvedValue([buildInvitation()]);
+    policyModelMocks.moveStagedInvitePolicyToUser.mockResolvedValue(policy);
+    memberModelMocks.addMember.mockRejectedValueOnce(new Error('insert failed'));
+
+    await expect(
+      acceptTeamInviteForNewUser({ email: 'invited@other.com', id: 'user_new' }),
+    ).resolves.toBeUndefined();
+
+    // The atomic policy move already completed before the member insert was
+    // even attempted — there is no window where the user exists as a member
+    // without their policy in force.
+    expect(policyModelMocks.moveStagedInvitePolicyToUser).toHaveBeenCalledTimes(1);
+    const moveOrder = policyModelMocks.moveStagedInvitePolicyToUser.mock.invocationCallOrder[0];
+    const addOrder = memberModelMocks.addMember.mock.invocationCallOrder[0];
+    expect(moveOrder).toBeLessThan(addOrder);
+
+    // The invitation stays pending (retryable) — never marked accepted early
+    expect(memberModelMocks.updateInvitationStatus).not.toHaveBeenCalled();
+
+    consoleError.mockRestore();
+  });
+
+  it('should never add the member when the policy move itself fails', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    dbMocks.where.mockResolvedValue([buildInvitation()]);
+    policyModelMocks.moveStagedInvitePolicyToUser.mockRejectedValueOnce(new Error('tx failed'));
+
+    await expect(
+      acceptTeamInviteForNewUser({ email: 'invited@other.com', id: 'user_new' }),
+    ).resolves.toBeUndefined();
+
+    // Fail-closed: no membership without the staged policy applied, and the
+    // invitation stays pending so acceptance can be retried.
+    expect(memberModelMocks.addMember).not.toHaveBeenCalled();
+    expect(memberModelMocks.updateInvitationStatus).not.toHaveBeenCalled();
+
+    consoleError.mockRestore();
   });
 
   it('should be a no-op when no pending invitation matches', async () => {

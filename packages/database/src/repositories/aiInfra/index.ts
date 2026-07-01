@@ -279,13 +279,22 @@ export class AiInfraRepos {
 
     if (!policy) return models;
 
-    // `policyAllowsModel` also rejects models of disallowed providers, so this
-    // single filter covers both provider- and model-level restrictions. It
-    // applies to `filterEnabled=false` callers too: the only internal one is
-    // `getAiProviderRuntimeState`, whose outputs (enabledAiModels + the
-    // enabledChat/Image/VideoAiProviders derivations) are all user-facing
-    // enabled lists.
-    return models.filter((item) => policyAllowsModel(policy, item.providerId, item.id));
+    // Policy filtering applies to `filterEnabled=false` callers too: the only
+    // internal one is `getAiProviderRuntimeState`, whose outputs
+    // (enabledAiModels + the enabledChat/Image/VideoAiProviders derivations)
+    // are all user-facing enabled lists.
+    return models.filter((item) => {
+      // Provider allowlist applies to every model type.
+      if (!policyAllowsProvider(policy, item.providerId)) return false;
+
+      // `allowedModels` narrowing is CHAT-ONLY (the admin editor can only
+      // express chat models) — embedding/image/video/etc. models of an allowed
+      // provider stay visible, otherwise narrowed users would silently lose
+      // RAG, file upload and image generation. See `UserModelPolicy` docs.
+      if ((item.type ?? 'chat') !== 'chat') return true;
+
+      return policyAllowsModel(policy, item.providerId, item.id);
+    });
   };
 
   getAiProviderRuntimeState = async (
