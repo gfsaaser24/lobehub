@@ -24,6 +24,7 @@ export * from './skill';
 export * from './taskTemplate';
 export * from './theme';
 export * from './trace';
+export * from './teamMode';
 export * from './url';
 export * from './user';
 export * from './userMemory';

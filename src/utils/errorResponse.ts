@@ -47,7 +47,8 @@ const getStatus = (errorType: ILobeAgentRuntimeErrorType | ErrorType) => {
       return 404;
     }
 
-    case AgentRuntimeErrorType.AccountDeactivated: {
+    case AgentRuntimeErrorType.AccountDeactivated:
+    case AgentRuntimeErrorType.PermissionDenied: {
       return 403;
     }
 

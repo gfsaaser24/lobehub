@@ -26,6 +26,7 @@ import { createLLMGenerationTracingHook } from '@/server/services/llmGenerationT
 
 import { KeyVaultsGateKeeper } from '../KeyVaultsEncrypt';
 import apiKeyManager from './apiKeyManager';
+import { createTeamPolicyHooks } from './teamPolicyHooks';
 
 export * from './trace';
 
@@ -437,14 +438,23 @@ export const initModelRuntimeFromDB = async (
   const keyVaults = (providerConfig?.keyVaults || {}) as ProviderKeyVaults;
   const payload = buildPayloadFromKeyVaults(keyVaults, runtimeProvider);
 
-  // 4. Get business hooks (billing in cloud, undefined in OSS)
+  // 4. Team-mode policy guard (fork): refuses disallowed provider/model pairs
+  //    before any upstream call. Merged FIRST so it aborts ahead of billing —
+  //    `mergeModelRuntimeHooks` chains shared keys in `a → b` order and the
+  //    existing hooks keep running unchanged after it passes.
+  const teamPolicyHooks = createTeamPolicyHooks(db, userId, provider);
+
+  // 5. Get business hooks (billing in cloud, undefined in OSS)
   const businessHooks = getBusinessModelRuntimeHooks(userId, provider, workspaceId);
 
-  // 5. Compose with the per-call llm_generation_tracing hook (no-op when the
+  // 6. Compose with the per-call llm_generation_tracing hook (no-op when the
   //    service is unconfigured, so OSS / self-hosted setups pay nothing for it).
   const tracingHooks = createLLMGenerationTracingHook(userId, provider, workspaceId);
-  const hooks = mergeModelRuntimeHooks(businessHooks, tracingHooks);
+  const hooks = mergeModelRuntimeHooks(
+    mergeModelRuntimeHooks(teamPolicyHooks, businessHooks),
+    tracingHooks,
+  );
 
-  // 6. Initialize ModelRuntime with the payload and hooks
+  // 7. Initialize ModelRuntime with the payload and hooks
   return initModelRuntimeWithUserPayload(provider, payload, { userId }, hooks);
 };
