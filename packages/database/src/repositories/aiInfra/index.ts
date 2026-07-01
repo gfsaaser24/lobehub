@@ -7,6 +7,7 @@ import type {
   EnabledProvider,
   ProviderConfig,
 } from '@lobechat/types';
+import { policyAllowsModel, policyAllowsProvider } from '@lobechat/types';
 import { isEmpty } from 'es-toolkit/compat';
 import type { AIChatModelCard, AiProviderModelListItem, EnabledAiModel } from 'model-bank';
 import { AiModelSourceEnum, isAiModelVisible, normalizeAiModelType } from 'model-bank';
@@ -17,6 +18,7 @@ import { merge, mergeArrayById } from '@/utils/merge';
 
 import { AiModelModel } from '../../models/aiModel';
 import { AiProviderModel } from '../../models/aiProvider';
+import { TeamPolicyModel } from '../../models/teamPolicy';
 import type { LobeChatDatabase } from '../../type';
 
 type DecryptUserKeyVaults = (encryptKeyVaultsStr: string | null) => Promise<any>;
@@ -127,6 +129,7 @@ export class AiInfraRepos {
   aiProviderModel: AiProviderModel;
   private readonly providerConfigs: Record<string, ProviderConfig>;
   aiModelModel: AiModelModel;
+  teamPolicyModel: TeamPolicyModel;
   private modelBankModelsPromise?: ReturnType<typeof loadModels>;
 
   constructor(
@@ -138,6 +141,7 @@ export class AiInfraRepos {
     this.db = db;
     this.aiProviderModel = new AiProviderModel(db, userId);
     this.aiModelModel = new AiModelModel(db, userId);
+    this.teamPolicyModel = new TeamPolicyModel(db);
     this.providerConfigs = providerConfigs;
   }
 
@@ -174,8 +178,14 @@ export class AiInfraRepos {
    * used in the chat page. to show the enabled providers
    */
   getUserEnabledProviderList = async () => {
-    const list = await this.getAiProviderList();
-    return list
+    const [list, policy] = await Promise.all([
+      this.getAiProviderList(),
+      // Team mode (fork): per-user provider restrictions — null (no policy /
+      // admin) means unrestricted
+      this.teamPolicyModel.getEffectivePolicy(this.userId),
+    ]);
+
+    const enabledList = list
       .filter((item) => item.enabled)
       .sort((a, b) => a.sort! - b.sort!)
       .map(
@@ -186,15 +196,22 @@ export class AiInfraRepos {
           source: item.source,
         }),
       );
+
+    if (!policy) return enabledList;
+
+    return enabledList.filter((item) => policyAllowsProvider(policy, item.id));
   };
 
   /**
    * used in the chat page. to show the enabled models
    */
   getEnabledModels = async (filterEnabled: boolean = true) => {
-    const [providers, allModels] = await Promise.all([
+    const [providers, allModels, policy] = await Promise.all([
       this.getAiProviderList(),
       this.aiModelModel.getAllModels(),
+      // Team mode (fork): per-user model restrictions — null (no policy /
+      // admin) means unrestricted
+      this.teamPolicyModel.getEffectivePolicy(this.userId),
     ]);
     const enabledProviders = providers.filter((item) => (filterEnabled ? item.enabled : true));
 
@@ -256,14 +273,39 @@ export class AiInfraRepos {
         injectSearchSettings(item.providerId, { ...item, type: normalizeAiModelType(item.type) }),
       );
 
-    return [...builtinModels, ...appendedUserModels].sort(
+    const models = [...builtinModels, ...appendedUserModels].sort(
       (a, b) => (a?.sort ?? Infinity) - (b?.sort ?? Infinity),
     ) as EnabledAiModel[];
+
+    if (!policy) return models;
+
+    // Policy filtering applies to `filterEnabled=false` callers too: the only
+    // internal one is `getAiProviderRuntimeState`, whose outputs
+    // (enabledAiModels + the enabledChat/Image/VideoAiProviders derivations)
+    // are all user-facing enabled lists.
+    return models.filter((item) => {
+      // Provider allowlist applies to every model type.
+      if (!policyAllowsProvider(policy, item.providerId)) return false;
+
+      // `allowedModels` narrowing is CHAT-ONLY (the admin editor can only
+      // express chat models) — embedding/image/video/etc. models of an allowed
+      // provider stay visible, otherwise narrowed users would silently lose
+      // RAG, file upload and image generation. See `UserModelPolicy` docs.
+      if ((item.type ?? 'chat') !== 'chat') return true;
+
+      return policyAllowsModel(policy, item.providerId, item.id);
+    });
   };
 
   getAiProviderRuntimeState = async (
     decryptor?: DecryptUserKeyVaults,
   ): Promise<AiProviderRuntimeState> => {
+    // Team mode (fork): `getUserEnabledProviderList` and `getEnabledModels`
+    // are already policy-filtered (single cached policy load per call), so
+    // every derived list below — enabledAiModels and the chat/image/video
+    // provider derivations over `allModels` — is filtered consistently.
+    // `runtimeConfig` stays unfiltered on purpose: it backs provider settings
+    // pages, and spend enforcement happens in the ModelRuntime hooks.
     const [result, enabledAiProviders, allModels] = await Promise.all([
       this.aiProviderModel.getAiProviderRuntimeConfig(decryptor),
       this.getUserEnabledProviderList(),

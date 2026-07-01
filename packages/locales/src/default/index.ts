@@ -42,6 +42,7 @@ import setting from './setting';
 import spend from './spend';
 import subscription from './subscription';
 import suggestQuestions from './suggestQuestions';
+import team from './team';
 import thread from './thread';
 import tool from './tool';
 import topic from './topic';
@@ -95,6 +96,7 @@ const resources = {
   spend,
   subscription,
   suggestQuestions,
+  team,
   thread,
   tool,
   topic,

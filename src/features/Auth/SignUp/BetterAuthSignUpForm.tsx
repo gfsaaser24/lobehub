@@ -1,10 +1,11 @@
 'use client';
 
 import { BRANDING_NAME } from '@lobechat/business-const';
+import type { InvitePublicInfo } from '@lobechat/types';
 import { Button, Icon, Text } from '@lobehub/ui';
 import { Form, Input, type InputRef } from 'antd';
 import { Lock, Mail } from 'lucide-react';
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Link, useNavigate, useSearchParams } from 'react-router';
 
@@ -24,14 +25,53 @@ const BetterAuthSignUpForm = () => {
   const emailInputRef = useRef<InputRef>(null);
   const passwordInputRef = useRef<InputRef>(null);
 
+  // Team mode (fork): arriving via an invite link locks the email to the
+  // invited address. The invite token itself is threaded to the server by
+  // useSignUp (as a custom header on signUp.email) — it is the enforced
+  // capability; the locked email is just UX.
+  const [inviteEmailLocked, setInviteEmailLocked] = useState(false);
+
   useEffect(() => {
-    const email = searchParams.get('email');
-    if (email) {
-      form.setFieldsValue({ email });
-      passwordInputRef.current?.focus();
+    let cancelled = false;
+    const inviteToken = searchParams.get('invite');
+
+    if (inviteToken) {
+      const prefillInvitedEmail = async () => {
+        try {
+          const response = await fetch(
+            `/api/auth/invite/${encodeURIComponent(inviteToken)}?full=1`,
+          );
+          const data: InvitePublicInfo = await response.json();
+
+          if (cancelled) return;
+
+          if (data.valid && data.email && !data.email.includes('***')) {
+            form.setFieldsValue({ email: data.email });
+            setInviteEmailLocked(true);
+            passwordInputRef.current?.focus();
+            return;
+          }
+        } catch {
+          // invalid/expired invite — fall back to the normal signup flow
+        }
+
+        if (!cancelled) emailInputRef.current?.focus();
+      };
+
+      void prefillInvitedEmail();
     } else {
-      emailInputRef.current?.focus();
+      const email = searchParams.get('email');
+      if (email) {
+        form.setFieldsValue({ email });
+        passwordInputRef.current?.focus();
+      } else {
+        emailInputRef.current?.focus();
+      }
     }
+
+    return () => {
+      cancelled = true;
+    };
   }, [searchParams, form]);
 
   const footer = (
@@ -63,6 +103,7 @@ const BetterAuthSignUpForm = () => {
         >
           <Input
             autoComplete="email"
+            disabled={inviteEmailLocked}
             inputMode="email"
             placeholder={t('betterAuth.signup.emailPlaceholder')}
             ref={emailInputRef}

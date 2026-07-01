@@ -24,6 +24,7 @@ import Skill from '../skill';
 import Stats from '../stats';
 import Storage from '../storage';
 import SystemTools from '../system-tools';
+import Team from '../team';
 
 export const componentMap = {
   [SettingsTabs.Advanced]: Advanced,
@@ -47,6 +48,7 @@ export const componentMap = {
   [SettingsTabs.Creds]: Creds,
   [SettingsTabs.Security]: Security,
   [SettingsTabs.Skill]: Skill,
+  [SettingsTabs.Team]: Team,
 
   [SettingsTabs.Plans]: Plans,
   [SettingsTabs.Credits]: Credits,

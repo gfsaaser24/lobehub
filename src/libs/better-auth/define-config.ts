@@ -226,6 +226,18 @@ export function defineConfig(customOptions: CustomBetterAuthOptions) {
               createdAt: user.createdAt,
               // TODO: if add phone plugin, we should fill phone here
             });
+
+            // Team mode (fork): auto-accept any pending team invitation matching
+            // this email. Dynamically imported + fully guarded so signup can
+            // never fail because of invite bookkeeping.
+            try {
+              const { acceptTeamInviteForNewUser } = await import(
+                '@/libs/better-auth/team-invite-acceptance'
+              );
+              await acceptTeamInviteForNewUser({ email: user.email, id: user.id });
+            } catch (error) {
+              console.error('[team-invite] invite acceptance failed for new user:', error);
+            }
           },
         },
       },

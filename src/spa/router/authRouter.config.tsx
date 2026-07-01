@@ -83,6 +83,10 @@ export const authRoutes: RouteObject[] = [
         path: 'signup',
       },
       {
+        element: lazyElement(() => import('@/routes/auth/join/[token]')),
+        path: 'join/:token',
+      },
+      {
         element: lazyElement(() => import('@/routes/auth/verify-email')),
         path: 'verify-email',
       },

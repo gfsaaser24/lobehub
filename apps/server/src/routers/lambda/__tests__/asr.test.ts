@@ -12,6 +12,13 @@ vi.mock('@/server/modules/ModelRuntime', () => ({
   initModelRuntimeFromDB: vi.fn(async () => ({ transcribe: transcribeMock })),
 }));
 
+// Team mode (fork): the transcribe route enforces the provider-level policy
+// itself (ModelRuntime has no transcription hook).
+const getEffectivePolicyMock = vi.fn();
+vi.mock('@/database/models/teamPolicy', () => ({
+  TeamPolicyModel: vi.fn(() => ({ getEffectivePolicy: getEffectivePolicyMock })),
+}));
+
 const findByIdMock = vi.fn();
 vi.mock('@/database/models/file', () => ({
   FileModel: vi.fn(() => ({ findById: findByIdMock })),
@@ -26,6 +33,8 @@ const caller = asrRouter.createCaller({ jwtPayload: { userId: 'u1' }, userId: 'u
 
 beforeEach(() => {
   transcribeMock.mockResolvedValue({ text: 'hello world' });
+  // no policy entry / admin → unrestricted
+  getEffectivePolicyMock.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -114,5 +123,37 @@ describe('asrRouter.transcribe', () => {
     await expect(caller.transcribe({ fileId: 'file_x', model: 'whisper-1' })).rejects.toThrow(
       /no longer available/i,
     );
+  });
+
+  describe('team policy enforcement (provider-level)', () => {
+    it('throws FORBIDDEN before any provider call when the provider is denied', async () => {
+      getEffectivePolicyMock.mockResolvedValue({ allowedProviders: ['anthropic'] });
+
+      await expect(
+        caller.transcribe({
+          audioBase64: Buffer.from('audio-bytes').toString('base64'),
+          model: 'whisper-1',
+          provider: 'openai',
+        }),
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+
+      expect(transcribeMock).not.toHaveBeenCalled();
+    });
+
+    it('allows an allowed provider even when allowedModels narrows its chat models', async () => {
+      // allowedModels is chat-only narrowing — ASR must not be narrowed by it
+      getEffectivePolicyMock.mockResolvedValue({
+        allowedModels: { openai: ['gpt-4'] },
+        allowedProviders: ['openai'],
+      });
+
+      const res = await caller.transcribe({
+        audioBase64: Buffer.from('audio-bytes').toString('base64'),
+        model: 'whisper-1',
+        provider: 'openai',
+      });
+
+      expect(res).toEqual({ text: 'hello world' });
+    });
   });
 });

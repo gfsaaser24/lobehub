@@ -1,8 +1,10 @@
+import { policyAllowsProvider } from '@lobechat/types';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
 import { wsCompatProcedure } from '@/business/server/trpc-middlewares/workspaceAuth';
 import { FileModel } from '@/database/models/file';
+import { TeamPolicyModel } from '@/database/models/teamPolicy';
 import type { LobeChatDatabase } from '@/database/type';
 import { router } from '@/libs/trpc/lambda';
 import { serverDatabase } from '@/libs/trpc/lambda/middleware';
@@ -75,6 +77,19 @@ export const asrRouter = router({
     )
     .mutation(async ({ ctx, input }): Promise<{ text: string }> => {
       const workspaceId = ctx.workspaceId ?? undefined;
+
+      // Team mode (fork): ModelRuntime has NO transcription hook, so the team
+      // policy hooks never run on this path and it would otherwise fall back to
+      // server env keys for restricted users. Enforce the PROVIDER-level policy
+      // here — `allowedModels` narrowing is chat-only (see `UserModelPolicy`),
+      // so ASR models of an allowed provider always pass.
+      const policy = await new TeamPolicyModel(ctx.serverDB).getEffectivePolicy(ctx.userId);
+      if (policy && !policyAllowsProvider(policy, input.provider)) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: `Your team policy does not allow provider "${input.provider}". Ask your team admin for access.`,
+        });
+      }
 
       const { bytes, fileName, mimeType } = await resolveAudio(ctx, input, workspaceId);
 
