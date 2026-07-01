@@ -1,14 +1,12 @@
-import { HotkeyEnum } from '@lobechat/const/hotkeys';
 import { Popconfirm } from 'antd';
 import { Eraser } from 'lucide-react';
 import { memo, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useIsMobile } from '@/hooks/useIsMobile';
+import { usePermission } from '@/hooks/usePermission';
 import { useChatStore } from '@/store/chat';
 import { useFileStore } from '@/store/file';
-import { useUserStore } from '@/store/user';
-import { settingsSelectors } from '@/store/user/selectors';
 
 import Action from '../components/Action';
 
@@ -24,11 +22,11 @@ export const useClearCurrentMessages = () => {
 
 const Clear = memo(() => {
   const { t } = useTranslation('setting');
-  const hotkey = useUserStore(settingsSelectors.getHotkeyById(HotkeyEnum.ClearCurrentMessages));
 
   const clearCurrentMessages = useClearCurrentMessages();
   const [confirmOpened, updateConfirmOpened] = useState(false);
   const mobile = useIsMobile();
+  const { allowed: canCreate } = usePermission('create_content');
 
   const actionTitle: any = confirmOpened ? void 0 : t('clearCurrentMessages', { ns: 'chat' });
 
@@ -37,7 +35,7 @@ const Clear = memo(() => {
   return (
     <Popconfirm
       arrow={false}
-      okButtonProps={{ danger: true, type: 'primary' }}
+      okButtonProps={{ danger: true, disabled: !canCreate, type: 'primary' }}
       open={confirmOpened}
       placement={popconfirmPlacement}
       title={
@@ -45,14 +43,19 @@ const Clear = memo(() => {
           {t('confirmClearCurrentMessages', { ns: 'chat' })}
         </div>
       }
-      onConfirm={clearCurrentMessages}
-      onOpenChange={updateConfirmOpened}
+      onConfirm={() => {
+        if (!canCreate) return;
+        clearCurrentMessages();
+      }}
+      onOpenChange={(open) => {
+        if (!canCreate && open) return;
+        updateConfirmOpened(open);
+      }}
     >
       <Action
         icon={Eraser}
         title={actionTitle}
         tooltipProps={{
-          hotkey,
           placement: 'bottom',
           styles: {
             root: { maxWidth: 'none' },

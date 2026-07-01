@@ -68,7 +68,7 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-vi.mock('react-router-dom', () => ({
+vi.mock('react-router', () => ({
   useNavigate: () => navigateMock,
 }));
 
@@ -124,16 +124,70 @@ vi.mock('@/store/page', () => ({
     }),
 }));
 
+vi.mock('@/store/user', () => ({
+  useUserStore: (selector: (state: Record<string, unknown>) => unknown) =>
+    selector({ preference: { lab: {} } }),
+}));
+
+vi.mock('@/store/user/selectors', () => ({
+  labPreferSelectors: {
+    enablePlatformAgent: () => false,
+  },
+}));
+
 const isActionItem = (
   item: unknown,
 ): item is {
+  label?: unknown;
   key: string;
-  onClick?: (info: { domEvent?: { stopPropagation?: () => void } }) => Promise<void>;
+  onClick?: (info: { domEvent?: { stopPropagation?: () => void } }) => Promise<void> | void;
 } => !!item && typeof item === 'object' && 'key' in item;
 
 describe('useCreateMenuItems', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+  });
+
+  it('adds the market agent entry to the top-level create menu', async () => {
+    const { result } = renderHook(() => useCreateMenuItems());
+
+    const items = result.current.createTopLevelMenuItems();
+    const itemKeys = items.map((item) =>
+      isActionItem(item)
+        ? item.key
+        : item && typeof item === 'object' && 'type' in item
+          ? item.type
+          : item,
+    );
+
+    expect(itemKeys).toEqual([
+      'newAgent',
+      'newGroupChat',
+      'newPage',
+      'divider',
+      'newClaudeCodeAgent',
+      'newCodexAgent',
+      'divider',
+      'addAgentFromMarket',
+    ]);
+
+    const marketItem = items.find(
+      (item) => isActionItem(item) && item.key === 'addAgentFromMarket',
+    );
+
+    if (!isActionItem(marketItem)) {
+      throw new Error('Expected market agent menu item');
+    }
+
+    expect(marketItem.label).toBe('addAgentFromMarket');
+
+    const stopPropagation = vi.fn();
+    await act(async () => {
+      await marketItem.onClick?.({ domEvent: { stopPropagation } });
+    });
+
+    expect(stopPropagation).toHaveBeenCalled();
+    expect(navigateMock).toHaveBeenCalledWith('/community/agent');
   });
 
   it('creates the Claude Code agent normally when the CLI is available', async () => {
@@ -160,6 +214,7 @@ describe('useCreateMenuItems', () => {
           },
         },
         avatar: 'claude-avatar',
+        provider: 'claude-code',
         systemRole: '',
         title: 'Claude Code',
       },
@@ -193,6 +248,7 @@ describe('useCreateMenuItems', () => {
           },
         },
         avatar: 'avatar',
+        provider: 'codex',
         systemRole: '',
         title: 'Codex',
       },

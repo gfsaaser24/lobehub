@@ -1,3 +1,6 @@
+import type { BriefArtifacts } from '../brief';
+import type { ChatFileItem } from '../message/ui/chat';
+
 // ── Task type aliases ──
 
 export type TaskStatus =
@@ -30,6 +33,41 @@ export interface CheckpointConfig {
   };
 }
 
+/**
+ * Task-level delivery-acceptance (verify) gate config, persisted under
+ * `tasks.config.verify`. This is the authoritative source for a task run's
+ * verify gate — it is *not* unioned with any agent-level mount
+ * (`agencyConfig.verifyRubricId`) — the task config is authoritative and never
+ * field-level merged with the agent-level rubric.
+ *
+ * Subtasks inherit with whole-config override semantics: a subtask uses its own
+ * config when present, otherwise the nearest ancestor's config in full (never a
+ * field-level merge). Resolved at runtime via `TaskModel.resolveVerifyConfig`.
+ */
+export interface TaskVerifyConfig {
+  /** Whether the verify gate runs on topic completion. */
+  enabled?: boolean;
+  /** Task-level cap on verify repair / re-run iterations. */
+  maxIterations?: number;
+  /**
+   * The one-sentence acceptance requirement the user typed — the source the
+   * acceptance criteria were AI-generated from. Kept so the UI can show it and
+   * offer "regenerate", distinct from the resolved criteria themselves.
+   */
+  requirement?: string;
+  /**
+   * Which agent executes the verify run (the Push-model review agent). When
+   * omitted, falls back to the built-in verify agent. The execution target /
+   * bound device is inherited from the chosen agent's `agencyConfig`, not
+   * written here.
+   */
+  verifierAgentId?: string;
+  /** One-off ad-hoc criteria ids (references `verify_criteria.id`). */
+  verifyCriteriaIds?: string[];
+  /** Reuse a rubric template (references `verify_rubrics.id`). */
+  verifyRubricId?: string;
+}
+
 export interface WorkspaceDocNode {
   charCount: number | null;
   createdAt: string;
@@ -52,7 +90,33 @@ export interface WorkspaceData {
   tree: WorkspaceTreeNode[];
 }
 
+/**
+ * Audit record of the brief-emission decision for a completed topic.
+ *
+ * Persisted under `taskTopics.handoff.briefDecision`. Written for *every*
+ * synthesizeTopicBrief invocation (rule-conclusive and LLM-deferred alike) so
+ * the emit/skip outcome is inspectable per topic.
+ *
+ * - source='rule' — the deterministic gate (`shouldEmitTopicBrief`) was
+ *   conclusive on its own. `reason` mirrors the rule's reason string.
+ * - source='llm-judge' — the rule returned 'unknown' and an LLM made the call
+ *   via `chainJudgeBriefEmit`. `model` records which model voted.
+ */
+export interface BriefDecision {
+  decidedAt: string;
+  emit: boolean;
+  model?: string;
+  reason: string;
+  source: 'rule' | 'llm-judge';
+}
+
 export interface TaskTopicHandoff {
+  /**
+   * Outcome of the emit-vs-skip decision for the brief on this topic. The
+   * three LLM-produced fields above are agent-internal; this one is metadata
+   * about the brief delivery itself, written by the lifecycle service.
+   */
+  briefDecision?: BriefDecision;
   keyFindings?: string[];
   nextAction?: string;
   summary?: string;
@@ -73,7 +137,27 @@ export interface TaskSchedulerContext {
   tickMessageId?: string;
 }
 
+// Pointer back to the agent conversation that spawned this task via the
+// `createTask` tool. Captured at creation so the task lifecycle can deliver the
+// handoff result back to that session once the task completes.
+export interface TaskOriginContext {
+  // The agent that invoked the createTask tool (the task's creator session).
+  agentId?: string;
+  // The assistant message that carried the createTask tool call — the tool-call
+  // anchor, sourced from the runtime's `payload.parentMessageId` (NOT the source
+  // user message). A later bridge can backfill the tool message under this.
+  messageId?: string;
+  // The operation that was running when the task was created.
+  operationId?: string;
+  // The tool call id of the createTask invocation. Doubles as the dedupe key
+  // for the eventual result-bridge delivery.
+  toolCallId?: string;
+  // The topic the creator conversation lives in — the default delivery target.
+  topicId?: string;
+}
+
 export interface TaskContext {
+  origin?: TaskOriginContext;
   scheduler?: TaskSchedulerContext;
 }
 
@@ -100,6 +184,7 @@ export interface TaskItem {
   createdByUserId: string;
   currentTopicId: string | null;
   description: string | null;
+  editorData: unknown;
   error: string | null;
   heartbeatInterval: number | null;
   heartbeatTimeout: number | null;
@@ -119,6 +204,7 @@ export interface TaskItem {
   status: string;
   totalTopics: number | null;
   updatedAt: Date;
+  workspaceId: string | null;
 }
 
 export type TaskListItem = TaskItem & {
@@ -138,6 +224,7 @@ export interface NewTask {
   createdByUserId: string;
   currentTopicId?: string | null;
   description?: string | null;
+  editorData?: unknown;
   error?: string | null;
   heartbeatInterval?: number | null;
   heartbeatTimeout?: number | null;
@@ -157,6 +244,7 @@ export interface NewTask {
   status?: string;
   totalTopics?: number | null;
   updatedAt?: Date;
+  workspaceId?: string | null;
 }
 
 // ── Task Detail (shared across CLI, viewTask tool, task.detail router) ──
@@ -168,6 +256,11 @@ export interface TaskDetailSubtaskAssignee {
   title: string | null;
 }
 
+export interface TaskDetailSubtaskRunningTopic {
+  id: string;
+  operationId?: string | null;
+}
+
 export interface TaskDetailSubtask {
   assignee?: TaskDetailSubtaskAssignee | null;
   automationMode?: TaskAutomationMode | null;
@@ -177,6 +270,7 @@ export interface TaskDetailSubtask {
   identifier: string;
   name?: string | null;
   priority?: number | null;
+  runningTopic?: TaskDetailSubtaskRunningTopic | null;
   schedule?: { pattern?: string | null; timezone?: string | null };
   status: string;
 }
@@ -208,9 +302,10 @@ export interface TaskDetailActivityAgent {
 
 export interface TaskDetailActivity {
   actions?: unknown;
+  /** Brief-only: avatar of the agent that produced this brief; `null` when the agent is unknown or has been deleted. */
+  agent?: TaskDetailActivityAgent | null;
   agentId?: string | null;
-  agents?: TaskDetailActivityAgent[];
-  artifacts?: unknown;
+  artifacts?: BriefArtifacts | null;
   author?: TaskDetailActivityAuthor;
   briefType?: string;
   /**
@@ -222,6 +317,10 @@ export interface TaskDetailActivity {
   content?: string;
   createdAt?: string;
   cronJobId?: string | null;
+  /** Comment-only: rich Lexical JSON state. When present, supersedes `content` for rendering. */
+  editorData?: unknown;
+  /** Comment-only: files attached to this comment for rendering in the UI. */
+  files?: ChatFileItem[];
   id?: string;
   /**
    * Topic-only: persisted Gateway operation ID for the task topic, sourced
@@ -247,6 +346,12 @@ export interface TaskDetailActivity {
     threadId?: string | null;
   } | null;
   seq?: number | null;
+  /** Topic-only: task that owns this run when a parent detail includes descendant topics. */
+  sourceTaskId?: string | null;
+  /** Topic-only: display identifier of the task that owns this run, e.g. T-12. */
+  sourceTaskIdentifier?: string | null;
+  /** Topic-only: display name of the task that owns this run. */
+  sourceTaskName?: string | null;
   status?: string | null;
   summary?: string;
   taskId?: string | null;
@@ -267,7 +372,11 @@ export interface TaskDetailData {
   createdAt?: string;
   dependencies?: Array<{ dependsOn: string; type: string }>;
   description?: string | null;
+  /** Rich-editor JSON state for the instruction; preserves details markdown drops (image size, etc.). */
+  editorData?: unknown;
   error?: string | null;
+  /** Files attached to the task instruction (persistent context for every run). */
+  files?: ChatFileItem[];
   // heartbeat.interval: periodic execution interval | heartbeat.timeout+lastAt: watchdog monitoring (detects stuck tasks)
   heartbeat?: {
     interval?: number | null;
@@ -277,9 +386,8 @@ export interface TaskDetailData {
   identifier: string;
   instruction: string;
   name?: string | null;
-  parent?: { identifier: string; name: string | null } | null;
+  parent?: { agentId?: string | null; identifier: string; name: string | null } | null;
   priority?: number | null;
-  review?: Record<string, any> | null;
   schedule?: {
     maxExecutions?: number | null;
     pattern?: string | null;
@@ -289,5 +397,9 @@ export interface TaskDetailData {
   subtasks?: TaskDetailSubtask[];
   topicCount?: number;
   userId?: string | null;
+  /** Task-level verify (delivery-acceptance) gate config; `tasks.config.verify`. */
+  verify?: TaskVerifyConfig | null;
   workspace?: TaskDetailWorkspaceNode[];
+  /** Owning workspace; null for personal (non-workspace) tasks. */
+  workspaceId?: string | null;
 }

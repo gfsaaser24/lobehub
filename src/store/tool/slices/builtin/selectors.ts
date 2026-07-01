@@ -1,4 +1,8 @@
-import { runtimeManagedToolIds } from '@lobechat/builtin-tools';
+import {
+  alwaysOnToolIds,
+  manualModeExcludeToolIds,
+  runtimeManagedToolIds,
+} from '@lobechat/builtin-tools';
 import { type BuiltinSkill, type LobeToolMeta } from '@lobechat/types';
 
 import {
@@ -8,7 +12,7 @@ import {
 
 import { type ToolStoreState } from '../../initialState';
 import { agentSkillsSelectors } from '../agentSkills/selectors';
-import { KlavisServerStatus } from '../klavisStore';
+import { ComposioServerStatus } from '../composioStore';
 
 export interface LobeToolMetaWithAvailability extends LobeToolMeta {
   /**
@@ -48,29 +52,27 @@ const toSkillMetaWithAvailability = (s: BuiltinSkill): LobeToolMetaWithAvailabil
   availableInWeb: isBuiltinSkillAvailableInCurrentEnv(s.identifier),
 });
 
-const getKlavisMetas = (s: ToolStoreState): LobeToolMeta[] =>
-  (s.servers || [])
-    .filter((server) => server.status === KlavisServerStatus.CONNECTED && server.tools?.length)
+const getComposioMetas = (s: ToolStoreState): LobeToolMeta[] =>
+  (s.composioServers || [])
+    .filter((server) => server.status === ComposioServerStatus.ACTIVE && server.tools?.length)
     .map((server) => ({
-      author: 'Klavis',
+      author: 'Composio',
       // Use identifier as storage identifier (e.g., 'google-calendar')
       identifier: server.identifier,
       meta: {
         avatar: '☁️',
-        description: `LobeHub Mcp Server: ${server.serverName}`,
-        tags: ['klavis', 'mcp'],
-        // title still uses serverName to display friendly name
-        title: server.serverName,
+        description: `LobeHub Mcp Server: ${server.label}`,
+        tags: ['composio', 'mcp'],
+        title: server.label,
       },
       type: 'builtin' as const,
     }));
 
-const getKlavisMetasWithAvailability = (s: ToolStoreState): LobeToolMetaWithAvailability[] =>
-  getKlavisMetas(s).map((meta) => ({ ...meta, availableInWeb: true }));
+const getComposioMetasWithAvailability = (s: ToolStoreState): LobeToolMetaWithAvailability[] =>
+  getComposioMetas(s).map((meta) => ({ ...meta, availableInWeb: true }));
 
 // Set form for O(1) lookup inside the filter loop.
 const RUNTIME_MANAGED_TOOL_IDS = new Set(runtimeManagedToolIds);
-const USER_HIDDEN_BUILTIN_TOOL_IDS = new Set(['lobe-task']);
 
 /**
  * Shared list builder for the chat-input Tools popover.
@@ -103,8 +105,6 @@ const buildVisibleMetaList = (
       // (their enabled state is forced by AgentToolsEngine rules; user toggles would
       // be a no-op and create UI/state mismatch).
       if (includeHidden && RUNTIME_MANAGED_TOOL_IDS.has(item.identifier)) return false;
-      // Task tools are enabled by scenario/page context and should not be user-toggleable.
-      if (includeHidden && USER_HIDDEN_BUILTIN_TOOL_IDS.has(item.identifier)) return false;
 
       // Filter platform-specific tools (e.g., LocalSystem desktop-only)
       if (!isBuiltinToolAvailableInCurrentEnv(item.identifier)) return false;
@@ -128,7 +128,7 @@ const buildVisibleMetaList = (
     .map(toSkillMeta);
   const agentSkillMetas = agentSkillsSelectors.agentSkillMetaList(s);
 
-  return [...skillMetas, ...agentSkillMetas, ...builtinMetas, ...getKlavisMetas(s)];
+  return [...skillMetas, ...agentSkillMetas, ...builtinMetas, ...getComposioMetas(s)];
 };
 
 /**
@@ -179,7 +179,37 @@ const allMetaList = (s: ToolStoreState): LobeToolMetaWithAvailability[] => {
     .agentSkillMetaList(s)
     .map((meta) => ({ ...meta, availableInWeb: true }));
 
-  return [...skillMetas, ...agentSkillMetas, ...builtinMetas, ...getKlavisMetasWithAvailability(s)];
+  return [...skillMetas, ...agentSkillMetas, ...builtinMetas, ...getComposioMetasWithAvailability(s)];
+};
+
+/**
+ * Get installed discoverable builtin tools and skills.
+ * Excludes only tools with `discoverable: false` (pure infrastructure / internal).
+ * Includes hidden and runtime-managed tools (web-browsing, memory, cloud-sandbox, etc.).
+ */
+const discoverableMetaList = (s: ToolStoreState): LobeToolMeta[] => {
+  const { uninstalledBuiltinTools } = s;
+
+  const skillMetas = (s.builtinSkills || [])
+    .filter((skill) => {
+      if (!isBuiltinSkillAvailableInCurrentEnv(skill.identifier)) return false;
+      if (uninstalledBuiltinTools.includes(skill.identifier)) return false;
+      return true;
+    })
+    .map(toSkillMeta);
+
+  const agentSkillMetas = agentSkillsSelectors.agentSkillMetaList(s);
+
+  const builtinMetas = s.builtinTools
+    .filter((item) => {
+      // Exclude pure infrastructure tools (never user-facing)
+      if (item.discoverable === false) return false;
+      if (uninstalledBuiltinTools.includes(item.identifier)) return false;
+      return true;
+    })
+    .map(toBuiltinMeta);
+
+  return [...skillMetas, ...agentSkillMetas, ...builtinMetas, ...getComposioMetas(s)];
 };
 
 /**
@@ -192,15 +222,40 @@ const installedAllMetaList = (s: ToolStoreState): LobeToolMetaWithAvailability[]
   const builtinMetas = s.builtinTools
     .filter((item) => {
       if (EXCLUDED_TOOLS.has(item.identifier)) return false;
-      if (USER_HIDDEN_BUILTIN_TOOL_IDS.has(item.identifier)) return false;
       if (uninstalledBuiltinTools.includes(item.identifier)) return false;
 
       return true;
     })
     .map(toBuiltinMetaWithAvailability);
 
-  return [...builtinMetas, ...getKlavisMetasWithAvailability(s)];
+  return [...builtinMetas, ...getComposioMetasWithAvailability(s)];
 };
+
+const MANUAL_MODE_EXCLUDE_TOOL_IDS = new Set(manualModeExcludeToolIds);
+
+/**
+ * Get meta for the application-fixed tools (always-on, not user-controllable) that should
+ * be shown read-only in the chat-input Tools popover's "Pinned" section.
+ *
+ * These tools are normally `hidden` (and some are `discoverable: false`), so they never
+ * appear in `metaList` / `metaListIncludingHidden`. Here we read them directly from
+ * `builtinTools` by identifier, preserving the `alwaysOnToolIds` order and dropping any
+ * that aren't available in the current environment.
+ *
+ * The list must match what the engine actually enables: in manual skill-activate mode the
+ * discovery tools in `manualModeExcludeToolIds` (activator, skill-store) are stripped from
+ * the defaults before the enable checker runs, so they are NOT on — exclude them here too,
+ * otherwise the UI would claim a fixed tool that the runtime omits.
+ */
+const fixedDisplayMetaList =
+  ({ isManualMode }: { isManualMode: boolean } = { isManualMode: false }) =>
+  (s: ToolStoreState): LobeToolMeta[] =>
+    alwaysOnToolIds
+      .filter((id) => !(isManualMode && MANUAL_MODE_EXCLUDE_TOOL_IDS.has(id)))
+      .map((id) => s.builtinTools.find((tool) => tool.identifier === id))
+      .filter((tool): tool is ToolStoreState['builtinTools'][number] => !!tool)
+      .filter((tool) => isBuiltinToolAvailableInCurrentEnv(tool.identifier))
+      .map(toBuiltinMeta);
 
 /**
  * Get installed builtin skills (excludes uninstalled ones)
@@ -226,6 +281,8 @@ const isBuiltinToolInstalled = (identifier: string) => (s: ToolStoreState) =>
 
 export const builtinToolSelectors = {
   allMetaList,
+  discoverableMetaList,
+  fixedDisplayMetaList,
   installedAllMetaList,
   installedBuiltinSkills,
   isBuiltinToolInstalled,
@@ -233,5 +290,3 @@ export const builtinToolSelectors = {
   metaListIncludingHidden,
   uninstalledBuiltinTools,
 };
-
-export { USER_HIDDEN_BUILTIN_TOOL_IDS };

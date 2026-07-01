@@ -18,7 +18,10 @@ const getStatus = (errorType: ILobeAgentRuntimeErrorType | ErrorType) => {
   switch (errorType) {
     case ChatErrorType.SubscriptionPlanLimit:
     case ChatErrorType.FreePlanLimit:
-    case ChatErrorType.InsufficientBudgetForModel: {
+    case ChatErrorType.InsufficientBudgetForModel:
+    case ChatErrorType.WorkspaceFrozenByAdmin:
+    case ChatErrorType.WorkspaceFrozenByRiskControl:
+    case ChatErrorType.WorkspaceSubscriptionInactive: {
       return 403;
     }
 
@@ -29,8 +32,10 @@ const getStatus = (errorType: ILobeAgentRuntimeErrorType | ErrorType) => {
     }
 
     case AgentRuntimeErrorType.ExceededContextWindow:
+    case AgentRuntimeErrorType.ExceededToolLimit:
     case ChatErrorType.SubscriptionKeyMismatch:
-    case ChatErrorType.SystemTimeNotMatchError: {
+    case ChatErrorType.SystemTimeNotMatchError:
+    case ChatErrorType.LobeHubModelDeprecated: {
       return 400;
     }
 
@@ -56,7 +61,8 @@ const getStatus = (errorType: ILobeAgentRuntimeErrorType | ErrorType) => {
       return 470;
     }
 
-    case AgentRuntimeErrorType.ProviderBizError: {
+    case AgentRuntimeErrorType.ProviderBizError:
+    case AgentRuntimeErrorType.ProviderContentPolicyViolation: {
       return 471;
     }
 

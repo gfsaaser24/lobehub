@@ -9,27 +9,23 @@ import { useTranslation } from 'react-i18next';
 import { DEFAULT_AVATAR } from '@/const/meta';
 import { type ActionKeys } from '@/features/ChatInput';
 import { ChatInputProvider, DesktopChatInput } from '@/features/ChatInput';
+import { useConversationStore } from '@/features/Conversation';
+import { contextSelectors } from '@/features/Conversation/store';
 import GroupAvatar from '@/features/GroupAvatar';
 import WideScreenContainer from '@/features/WideScreenContainer';
 import { useAgentGroupStore } from '@/store/agentGroup';
 import { agentGroupSelectors } from '@/store/agentGroup/selectors';
 import { useChatStore } from '@/store/chat';
-import { aiChatSelectors } from '@/store/chat/selectors';
+import { agentRunSelectors } from '@/store/chat/selectors';
 
 import MessageFromUrl from './MessageFromUrl';
 import { useSendMenuItems } from './useSendMenuItems';
 
-const leftActions: ActionKeys[] = [
-  'typo',
-  'fileUpload',
-  '---',
-  ['tools', 'params', 'clear'],
-  'mainToken',
-];
+const leftActions: ActionKeys[] = ['typo', 'fileUpload', '---', ['tools', 'params', 'clear']];
 
-const dmLeftActions: ActionKeys[] = ['typo', 'fileUpload', '---', ['stt']];
+const dmLeftActions: ActionKeys[] = ['typo', 'fileUpload'];
 
-const rightActions: ActionKeys[] = [];
+const rightActions: ActionKeys[] = ['contextWindow'];
 
 /**
  * Message Editor for Group Chat along with DM Portal
@@ -38,10 +34,15 @@ const Desktop = memo((props: { targetMemberId?: string }) => {
   const { t } = useTranslation('chat');
 
   const isDMPortal = !!props.targetMemberId;
-  const currentGroupMembers = useAgentGroupStore(agentGroupSelectors.currentGroupAgents, isEqual);
+  const groupId = useConversationStore(contextSelectors.groupId);
+  const currentGroupMembers = useAgentGroupStore(
+    (s) => agentGroupSelectors.getGroupAgents(groupId ?? '')(s),
+    isEqual,
+  );
+  const isGroupConfigLoading = useAgentGroupStore(agentGroupSelectors.isGroupsInit);
 
   const [mainInputSendErrorMsg, clearSendMessageError] = useChatStore((s) => [
-    aiChatSelectors.isCurrentSendMessageError(s),
+    agentRunSelectors.isCurrentSendMessageError(s),
     s.clearSendMessageError,
   ]);
 
@@ -77,7 +78,7 @@ const Desktop = memo((props: { targetMemberId?: string }) => {
         metadata: { id: member.id },
       })),
     ];
-  }, [currentGroupMembers]);
+  }, [currentGroupMembers, t]);
 
   const sendMenuItems = useSendMenuItems();
 
@@ -108,7 +109,7 @@ const Desktop = memo((props: { targetMemberId?: string }) => {
             />
           </Flexbox>
         )}
-        <DesktopChatInput />
+        <DesktopChatInput isConfigLoading={isGroupConfigLoading} />
       </WideScreenContainer>
       <Suspense>
         <MessageFromUrl />

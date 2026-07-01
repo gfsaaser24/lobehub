@@ -1,19 +1,20 @@
 'use client';
 
 import { exportJSONFile } from '@lobechat/utils/client';
-import { Icon } from '@lobehub/ui';
-import { App, Dropdown, type MenuProps } from 'antd';
+import { ActionIcon, type DropdownItem, DropdownMenu, Icon, Tag } from '@lobehub/ui';
+import { confirmModal } from '@lobehub/ui/base-ui';
+import { App } from 'antd';
 import { createStaticStyles, cx, useTheme } from 'antd-style';
 import { Book, Download, MoreHorizontal, Trash2, Upload } from 'lucide-react';
 import { memo, useCallback, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import type { SerializedPlatformDefinition } from '@/server/services/bot/platforms/types';
 import { useAgentStore } from '@/store/agent';
 import type { BotProviderItem } from '@/store/agent/slices/bot/action';
 
 import { BOT_RUNTIME_STATUSES, type BotRuntimeStatus } from '../../../../types/botRuntimeStatus';
-import { getPlatformIcon } from './const';
+import { type ChannelPlatformDefinition, getPlatformIcon } from './const';
+import MessengerPromo from './MessengerPromo';
 
 const styles = createStaticStyles(({ css, cssVar }) => ({
   item: css`
@@ -42,7 +43,6 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
     }
 
     &.active {
-      font-weight: 500;
       color: ${cssVar.colorText};
       background: ${cssVar.colorFillSecondary};
     }
@@ -78,17 +78,18 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
 interface PlatformListProps {
   activeId: string;
   agentId: string;
+  disabled?: boolean;
   onSelect: (id: string) => void;
-  platforms: SerializedPlatformDefinition[];
+  platforms: ChannelPlatformDefinition[];
   providers?: BotProviderItem[];
   runtimeStatuses: Map<string, BotRuntimeStatus>;
 }
 
 const PlatformList = memo<PlatformListProps>(
-  ({ platforms, activeId, agentId, onSelect, providers, runtimeStatuses }) => {
+  ({ platforms, activeId, agentId, disabled, onSelect, providers, runtimeStatuses }) => {
     const { t } = useTranslation('agent');
     const theme = useTheme();
-    const { modal, message } = App.useApp();
+    const { message } = App.useApp();
     const fileInputRef = useRef<HTMLInputElement>(null);
     const deleteAllBotProviders = useAgentStore((s) => s.deleteAllBotProviders);
     const createBotProvider = useAgentStore((s) => s.createBotProvider);
@@ -101,12 +102,17 @@ const PlatformList = memo<PlatformListProps>(
     }, [providers, agentId]);
 
     const handleImport = useCallback(() => {
+      if (disabled) return;
       fileInputRef.current?.click();
-    }, []);
+    }, [disabled]);
 
     const handleFileChange = useCallback(
       async (e: React.ChangeEvent<HTMLInputElement>) => {
         const file = e.target.files?.[0];
+        if (disabled) {
+          e.target.value = '';
+          return;
+        }
         if (!file) return;
 
         try {
@@ -149,12 +155,13 @@ const PlatformList = memo<PlatformListProps>(
           e.target.value = '';
         }
       },
-      [agentId, connectBot, createBotProvider, message, t],
+      [agentId, connectBot, createBotProvider, disabled, message, t],
     );
 
     const handleDeleteAll = useCallback(() => {
+      if (disabled) return;
       if (!providers?.length) return;
-      modal.confirm({
+      confirmModal({
         content: t('channel.deleteAllConfirmDesc'),
         okButtonProps: { danger: true },
         okText: t('channel.deleteAllChannels'),
@@ -167,12 +174,11 @@ const PlatformList = memo<PlatformListProps>(
           }
         },
         title: t('channel.deleteAllConfirm'),
-        type: 'warning',
       });
-    }, [agentId, deleteAllBotProviders, message, modal, providers, t]);
+    }, [agentId, deleteAllBotProviders, disabled, message, providers, t]);
 
     const hasProviders = !!providers?.length;
-    const menuItems: MenuProps['items'] = [
+    const menuItems: DropdownItem[] = [
       {
         icon: <Icon icon={Download} size={'small'} />,
         key: 'export',
@@ -183,13 +189,14 @@ const PlatformList = memo<PlatformListProps>(
       {
         icon: <Icon icon={Upload} size={'small'} />,
         key: 'import',
+        disabled,
         label: t('channel.importConfig'),
         onClick: handleImport,
       },
-      { type: 'divider' },
+      { type: 'divider' as const },
       {
         danger: true,
-        disabled: !hasProviders,
+        disabled: disabled || !hasProviders,
         icon: <Icon icon={Trash2} size={'small'} />,
         key: 'deleteAll',
         label: t('channel.deleteAllChannels'),
@@ -261,7 +268,9 @@ const PlatformList = memo<PlatformListProps>(
             const PlatformIcon = getPlatformIcon(platform.name);
             const ColorIcon =
               PlatformIcon && 'Color' in PlatformIcon ? (PlatformIcon as any).Color : PlatformIcon;
-            const runtimeStatus = runtimeStatuses.get(platform.id);
+            const runtimeStatus = platform.comingSoon
+              ? undefined
+              : runtimeStatuses.get(platform.id);
             const statusColor = getStatusColor(runtimeStatus);
             const statusTitle = getStatusTitle(runtimeStatus);
             return (
@@ -272,6 +281,11 @@ const PlatformList = memo<PlatformListProps>(
               >
                 {ColorIcon && <ColorIcon size={20} />}
                 <span style={{ flex: 1 }}>{platform.name}</span>
+                {platform.comingSoon && (
+                  <Tag size={'small'} style={{ marginInlineEnd: 0 }}>
+                    {t('channel.comingSoon')}
+                  </Tag>
+                )}
                 {runtimeStatus && (
                   <div
                     className={styles.statusDot}
@@ -283,6 +297,7 @@ const PlatformList = memo<PlatformListProps>(
             );
           })}
         </div>
+        <MessengerPromo />
         <div
           style={{
             alignItems: 'center',
@@ -306,21 +321,9 @@ const PlatformList = memo<PlatformListProps>(
           >
             <Icon icon={Book} size={'small'} /> {t('channel.documentation')}
           </a>
-          <Dropdown menu={{ items: menuItems }} trigger={['click']}>
-            <button
-              style={{
-                background: 'transparent',
-                border: 'none',
-                borderRadius: 4,
-                color: theme.colorTextQuaternary,
-                cursor: 'pointer',
-                display: 'flex',
-                padding: 4,
-              }}
-            >
-              <Icon icon={MoreHorizontal} size={'small'} />
-            </button>
-          </Dropdown>
+          <DropdownMenu items={menuItems}>
+            <ActionIcon icon={MoreHorizontal} />
+          </DropdownMenu>
         </div>
       </aside>
     );

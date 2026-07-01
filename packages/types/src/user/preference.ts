@@ -43,22 +43,44 @@ export const UserLabSchema = z.object({
    */
   enableAgentSelfIteration: z.boolean().optional(),
   /**
-   * enable server-side agent execution via Gateway WebSocket
+   * enable the floating chat panel in agent document preview
    */
-  enableGatewayMode: z.boolean().optional(),
+  enableAgentDocumentFloatingChatPanel: z.boolean().optional(),
+  /**
+   * enable the Fleet view (side-by-side running-task dashboard)
+   */
+  enableFleet: z.boolean().optional(),
+  /**
+   * fold a finished agent turn's process under a "已处理" header when its final answer is visible
+   */
+  enableFoldFinishedTurn: z.boolean().optional(),
   /**
    * enable multi-agent group chat mode
    */
   enableGroupChat: z.boolean().optional(),
   /**
+   * enable the iMessage channel (BlueBubbles Desktop bridge)
+   */
+  enableImessage: z.boolean().optional(),
+  /**
    * enable markdown rendering in chat input editor
    */
   enableInputMarkdown: z.boolean().optional(),
+  /**
+   * show the "Add Platform Agent" entry in the create menu
+   */
+  enablePlatformAgent: z.boolean().optional(),
+  /**
+   * enable the task delivery-acceptance (verify) config UI on the task detail
+   */
+  enableTaskVerify: z.boolean().optional(),
 });
 
 export type UserLab = z.infer<typeof UserLabSchema>;
 
 export interface UserPreference {
+  /** Last-used app for "Open working directory in…" split button. Empty/unknown values fall back to platform default. */
+  defaultOpenInApp?: string;
   /**
    * disable markdown rendering in chat input editor
    * @deprecated Use lab.enableInputMarkdown instead
@@ -70,6 +92,12 @@ export interface UserPreference {
    * lab experimental features
    */
   lab?: UserLab;
+  /**
+   * Last active workspace id. Used on cloud to land the user back in the
+   * workspace they last used when they open `/` — `null` means personal
+   * context. Stored as id (not slug) so workspace renames don't invalidate it.
+   */
+  lastWorkspaceId?: string | null;
   /**
    * @deprecated Use settings.general.telemetry instead
    */
@@ -137,11 +165,13 @@ export interface SSOProvider {
 
 export const UserPreferenceSchema = z
   .object({
+    defaultOpenInApp: z.string().optional(),
     guide: UserGuideSchema.optional(),
     hideSyncAlert: z.boolean().optional(),
     lab: UserLabSchema.optional(),
+    lastWorkspaceId: z.string().nullish(),
     telemetry: z.boolean().nullable(),
-    topicGroupMode: z.enum(['byTime', 'byProject', 'flat']).optional(),
+    topicGroupMode: z.enum(['byTime', 'byProject', 'flat', 'byStatus']).optional(),
     topicIncludeCompleted: z.boolean().optional(),
     topicSortBy: z.enum(['createdAt', 'updatedAt']).optional(),
     useCmdEnterToSend: z.boolean().optional(),

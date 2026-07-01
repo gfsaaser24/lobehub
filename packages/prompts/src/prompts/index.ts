@@ -1,4 +1,5 @@
 export * from './agentBuilder';
+export * from './agentDocuments';
 export * from './agentGroup';
 export * from './agentSignal';
 export * from './agentSkillManager';
@@ -9,9 +10,9 @@ export * from './discordContext';
 export * from './files';
 export * from './fileSystem';
 export * from './groupChat';
-export * from './gtd';
 export * from './knowledgeBaseQA';
 export * from './messagesToText';
+export * from './planTodo';
 export * from './plugin';
 export * from './remoteDevice';
 export * from './search';

@@ -1,8 +1,7 @@
-import { Flexbox, Icon, Tag } from '@lobehub/ui';
-import { TreeDownRightIcon } from '@lobehub/ui/icons';
+import { Icon } from '@lobehub/ui';
 import { cssVar } from 'antd-style';
+import { CornerDownRight } from 'lucide-react';
 import { memo, useCallback } from 'react';
-import { useTranslation } from 'react-i18next';
 
 import NavItem from '@/features/NavPanel/components/NavItem';
 import { useChatStore } from '@/store/chat';
@@ -19,8 +18,12 @@ export interface ThreadItemProps {
   title: string;
 }
 
+// Indent applied INSIDE the NavItem's Block (overrides default paddingInline=4
+// on the start side), so the icon + title shift right by one icon-slot width
+// while the row background/highlight stays full-width.
+const SUBAGENT_PADDING_INLINE_START = 32;
+
 const ThreadItem = memo<ThreadItemProps>(({ title, id, isSubagent }) => {
-  const { t } = useTranslation('chat');
   const [editing, activeThreadId] = useChatStore((s) => [
     s.threadRenamingId === id,
     s.activeThreadId,
@@ -47,34 +50,23 @@ const ThreadItem = memo<ThreadItemProps>(({ title, id, isSubagent }) => {
 
   const active = id === activeThreadId;
 
-  // Subagent threads (spawned by an external agent's subagent tool call)
-  // only get a plain "Subagent" badge — the specific template name is
-  // surfaced on the Thread header instead, where there's room for it.
   return (
     <>
       <NavItem
         actions={<Actions dropdownMenu={dropdownMenu} />}
         active={active && !isInAgentSubRoute}
         contextMenuItems={dropdownMenu}
+        data-thread-id={id}
         disabled={editing}
-        icon={<Icon color={cssVar.colorTextDescription} icon={TreeDownRightIcon} size={'small'} />}
-        title={
-          isSubagent ? (
-            <Flexbox horizontal align={'center'} flex={1} gap={6}>
-              <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {title}
-              </span>
-              <Tag
-                size={'small'}
-                style={{ color: cssVar.colorTextDescription, flexShrink: 0, fontSize: 10 }}
-              >
-                {t('thread.subagentBadge')}
-              </Tag>
-            </Flexbox>
-          ) : (
-            title
-          )
-        }
+        icon={<Icon color={cssVar.colorTextDescription} icon={CornerDownRight} size={'small'} />}
+        // The capped ThreadList is a flex column, so rows shrink to fit its
+        // max-height instead of overflowing — the scroll never engages. Pin the
+        // row min-height to the NavItem height (36) to force overflow → scroll.
+        title={title}
+        style={{
+          minHeight: 36,
+          ...(isSubagent && { paddingInlineStart: SUBAGENT_PADDING_INLINE_START }),
+        }}
         onClick={handleClick}
       />
       <Editing id={id} title={title} toggleEditing={toggleEditing} />

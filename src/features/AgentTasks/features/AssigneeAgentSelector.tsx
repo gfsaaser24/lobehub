@@ -1,22 +1,14 @@
 import { DEFAULT_INBOX_AVATAR } from '@lobechat/const';
 import { Flexbox, Popover, Text, Tooltip } from '@lobehub/ui';
 import { createStaticStyles } from 'antd-style';
-import {
-  type KeyboardEvent,
-  memo,
-  type ReactNode,
-  Suspense,
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-} from 'react';
+import type { CSSProperties, KeyboardEvent, ReactNode } from 'react';
+import { memo, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import SkeletonList from '@/features/NavPanel/components/SkeletonList';
 import AgentItem from '@/features/PageEditor/Copilot/AgentSelector/AgentItem';
 import { useFetchAgentList } from '@/hooks/useFetchAgentList';
+import { usePermission } from '@/hooks/usePermission';
 import { useAgentStore } from '@/store/agent';
 import { agentSelectors, builtinAgentSelectors } from '@/store/agent/selectors';
 import { useHomeStore } from '@/store/home';
@@ -52,9 +44,17 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
   `,
 }));
 
+const triggerStyle: CSSProperties = {
+  alignItems: 'center',
+  display: 'inline-flex',
+  justifyContent: 'center',
+  lineHeight: 1,
+};
+
 const AssigneeAgentSelector = memo<AssigneeAgentSelectorProps>(
   ({ children, currentAgentId, disabled, onChange, taskIdentifier }) => {
     const { t } = useTranslation(['chat', 'common']);
+    const { allowed: canEditTask, reason } = usePermission('create_content');
     const [key, setKey] = useState(0);
     const [search, setSearch] = useState('');
     const [activeIndex, setActiveIndex] = useState(0);
@@ -110,6 +110,7 @@ const AssigneeAgentSelector = memo<AssigneeAgentSelectorProps>(
 
     const handleAgentChange = useCallback(
       (agentId: string) => {
+        if (!canEditTask) return;
         if (agentId === currentAgentId) return;
         setKey((k) => k + 1);
         setSearch('');
@@ -121,7 +122,7 @@ const AssigneeAgentSelector = memo<AssigneeAgentSelectorProps>(
           void updateTask(taskIdentifier, { assigneeAgentId: agentId });
         }
       },
-      [currentAgentId, onChange, taskIdentifier, updateTask],
+      [canEditTask, currentAgentId, onChange, taskIdentifier, updateTask],
     );
 
     const handleSearchKeyDown = useCallback(
@@ -150,19 +151,25 @@ const AssigneeAgentSelector = memo<AssigneeAgentSelectorProps>(
       active?.scrollIntoView({ block: 'nearest' });
     }, [activeIndex]);
 
-    const trigger = disabled ? (
-      <Tooltip title={t('taskDetail.reassignDisabled', { ns: 'chat' })}>
-        <div style={{ cursor: 'not-allowed', opacity: 0.5 }} onClick={(e) => e.stopPropagation()}>
+    const blocked = disabled || !canEditTask;
+    const trigger = blocked ? (
+      <Tooltip title={disabled ? t('taskDetail.reassignDisabled', { ns: 'chat' }) : reason}>
+        <div
+          style={{ ...triggerStyle, cursor: 'not-allowed', opacity: 0.5 }}
+          onClick={(e) => e.stopPropagation()}
+        >
           <span style={{ pointerEvents: 'none' }}>{children}</span>
         </div>
       </Tooltip>
     ) : (
-      <div onClick={(e) => e.stopPropagation()}>{children}</div>
+      <div style={triggerStyle} onClick={(e) => e.stopPropagation()}>
+        {children}
+      </div>
     );
 
     return (
       <Popover
-        disabled={disabled}
+        disabled={blocked}
         key={key}
         placement="bottomLeft"
         styles={{ content: { padding: 0, width: 260 } }}
@@ -203,6 +210,7 @@ const AssigneeAgentSelector = memo<AssigneeAgentSelectorProps>(
                           agentId={agent.id}
                           agentTitle={agent.title || t('untitledAgent', { ns: 'chat' })}
                           avatar={agent.avatar}
+                          heterogeneousType={agent.heterogeneousType}
                           onAgentChange={handleAgentChange}
                           onClose={() => setKey((k) => k + 1)}
                         />

@@ -1,3 +1,5 @@
+import { CUSTOM_DOCUMENT_FILE_TYPE, DERIVED_DOCUMENT_SOURCE_TYPE } from '@lobechat/const';
+
 import { type FileListItem, type KnowledgeItemStatus } from '@/types/files';
 import {
   type CreateResourceParams,
@@ -31,6 +33,8 @@ const mapToResourceItem = (item: FileListItem): ResourceItem => {
     embeddingStatus: item.embeddingStatus,
 
     embeddingTaskId: item.embeddingStatus ? 'placeholder' : null,
+
+    fileId: item.fileId,
 
     fileType: item.fileType,
 
@@ -196,14 +200,14 @@ export class ResourceService {
           typeof created.editorData === 'string'
             ? JSON.parse(created.editorData)
             : created.editorData,
-        fileType: created.fileType || 'custom/document',
+        fileType: created.fileType || CUSTOM_DOCUMENT_FILE_TYPE,
         id: created.id,
         metadata: created.metadata || undefined,
         name: created.title || 'Untitled',
         parentId: created.parentId,
         size: created.totalCharCount || 0,
         slug: created.slug || undefined,
-        sourceType: 'document',
+        sourceType: DERIVED_DOCUMENT_SOURCE_TYPE,
         title: created.title || undefined,
         updatedAt: created.updatedAt ? new Date(created.updatedAt) : new Date(),
         url: created.source || '',

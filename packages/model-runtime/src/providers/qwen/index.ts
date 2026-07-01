@@ -1,5 +1,6 @@
 import { ModelProvider } from 'model-bank';
 
+import type { OpenAICompatibleFactoryOptions } from '../../core/openaiCompatibleFactory';
 import { createOpenAICompatibleRuntime } from '../../core/openaiCompatibleFactory';
 import { resolveParameters } from '../../core/parameterResolver';
 import { QwenAIStream } from '../../core/streams';
@@ -23,12 +24,23 @@ export const QwenLegacyModels = new Set([
   'qwen-1.8b-longcontext-chat',
 ]);
 
-export const LobeQwenAI = createOpenAICompatibleRuntime({
+export const params = {
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   chatCompletion: {
     handlePayload: (payload) => {
-      const { model, presence_penalty, temperature, thinking, top_p, enabledSearch, ...rest } =
-        payload;
+      const {
+        model,
+        presence_penalty,
+        reasoning_effort,
+        temperature,
+        thinking,
+        top_p,
+        enabledSearch,
+        preserveThinking,
+        ...rest
+      } = payload;
+      const isDeepSeekV4Model = model.startsWith('deepseek-v4');
+      const thinkingExplicitlyDisabled = thinking?.type === 'disabled';
 
       // Resolve parameters with model-specific constraints
       const resolvedParams = resolveParameters(
@@ -44,24 +56,53 @@ export const LobeQwenAI = createOpenAICompatibleRuntime({
         },
       );
 
+      const messages = (rest.messages || []).map((message: any) => {
+        const { reasoning, ...messageRest } = message;
+
+        const reasoningContent =
+          typeof messageRest.reasoning_content === 'string'
+            ? messageRest.reasoning_content
+            : typeof reasoning?.content === 'string'
+              ? reasoning.content
+              : undefined;
+
+        if (reasoningContent !== undefined) {
+          return {
+            ...messageRest,
+            reasoning_content: reasoningContent,
+          };
+        }
+
+        return messageRest;
+      });
+
       return {
         ...rest,
-        ...(model.includes('-thinking')
+        ...(isDeepSeekV4Model
           ? {
+            ...(thinking?.type === 'enabled' || thinkingExplicitlyDisabled
+              ? { enable_thinking: !thinkingExplicitlyDisabled }
+              : {}),
+            ...(!thinkingExplicitlyDisabled && reasoning_effort && { reasoning_effort }),
+          }
+          : model.includes('-thinking')
+            ? {
               enable_thinking: true,
               thinking_budget:
                 thinking?.budget_tokens === 0 ? 0 : thinking?.budget_tokens || undefined,
             }
-          : thinking
-            ? {
+            : thinking
+              ? {
                 ...(thinking.type !== undefined && {
                   enable_thinking: thinking.type === 'enabled',
                 }),
                 thinking_budget:
                   thinking?.budget_tokens === 0 ? 0 : thinking?.budget_tokens || undefined,
               }
-            : {}),
+              : {}),
+        ...(typeof preserveThinking === 'boolean' && { preserve_thinking: preserveThinking }),
         frequency_penalty: undefined,
+        messages,
         model,
         presence_penalty: resolvedParams.presence_penalty,
         stream: true,
@@ -101,4 +142,6 @@ export const LobeQwenAI = createOpenAICompatibleRuntime({
     return processMultiProviderModelList(modelList, 'qwen');
   },
   provider: ModelProvider.Qwen,
-});
+} satisfies OpenAICompatibleFactoryOptions;
+
+export const LobeQwenAI = createOpenAICompatibleRuntime(params);

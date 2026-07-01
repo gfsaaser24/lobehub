@@ -1,11 +1,11 @@
 import { isDesktop } from '@lobechat/const';
 import { uuid } from '@lobechat/utils';
-import { template } from 'es-toolkit/compat';
 
 import { useAgentStore } from '@/store/agent';
 import { agentSelectors } from '@/store/agent/selectors';
 import { useChatStore } from '@/store/chat';
 import { topicSelectors } from '@/store/chat/selectors';
+import { getElectronStoreState } from '@/store/electron';
 import { useUserStore } from '@/store/user';
 import { userProfileSelectors } from '@/store/user/selectors';
 
@@ -162,7 +162,10 @@ export const VARIABLE_GENERATORS = {
     const topicWorkingDir = topicSelectors.currentTopicWorkingDirectory(useChatStore.getState());
     if (topicWorkingDir) return topicWorkingDir;
 
-    const agentWorkingDir = agentSelectors.currentAgentWorkingDirectory(useAgentStore.getState());
+    const currentDeviceId = getElectronStoreState().gatewayDeviceInfo?.deviceId;
+    const agentWorkingDir = agentSelectors.currentAgentWorkingDirectory(currentDeviceId)(
+      useAgentStore.getState(),
+    );
     return agentWorkingDir ?? '(not specified, use user Home directory as default)';
   },
 } as Record<string, () => string>;
@@ -195,7 +198,10 @@ export const parsePlaceholderVariables = (text: string, depth = 2): string => {
           .filter(([, value]) => value !== undefined),
       );
 
-      const replaced = template(result, { interpolate: placeholderVariablesRegex })(variables);
+      const replaced = result.replaceAll(
+        placeholderVariablesRegex,
+        (match, key) => variables[key.trim()] ?? match,
+      );
       if (replaced === result) break;
 
       result = replaced;

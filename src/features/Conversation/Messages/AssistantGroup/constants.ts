@@ -136,31 +136,49 @@ export const TOOL_API_DISPLAY_NAMES: Record<string, string> = {
   solve: 'workflow.toolDisplayName.solve',
   execute: 'workflow.toolDisplayName.execute',
 
-  // Local system
-  editLocalFile: 'workflow.toolDisplayName.editLocalFile',
-  globLocalFiles: 'workflow.toolDisplayName.globLocalFiles',
+  // Local system / cloud sandbox (file ops share the same display label)
+  editFile: 'workflow.toolDisplayName.editLocalFile',
+  globFiles: 'workflow.toolDisplayName.globLocalFiles',
   grepContent: 'workflow.toolDisplayName.grepContent',
   killCommand: 'workflow.toolDisplayName.killCommand',
+  listFiles: 'workflow.toolDisplayName.listLocalFiles',
+  moveFiles: 'workflow.toolDisplayName.moveLocalFiles',
+  readFile: 'workflow.toolDisplayName.readLocalFile',
+  runCommand: 'workflow.toolDisplayName.runCommand',
+  searchFiles: 'workflow.toolDisplayName.searchLocalFiles',
+  writeFile: 'workflow.toolDisplayName.writeLocalFile',
+  getCommandOutput: 'workflow.toolDisplayName.getCommandOutput',
+  // Legacy aliases — keep so historical messages still get a label.
+  // `renameLocalFile` is kept even though the new surface drops rename
+  // (rename is now done via `moveFiles`).
+  editLocalFile: 'workflow.toolDisplayName.editLocalFile',
+  globLocalFiles: 'workflow.toolDisplayName.globLocalFiles',
   listLocalFiles: 'workflow.toolDisplayName.listLocalFiles',
   moveLocalFiles: 'workflow.toolDisplayName.moveLocalFiles',
   readLocalFile: 'workflow.toolDisplayName.readLocalFile',
   renameLocalFile: 'workflow.toolDisplayName.renameLocalFile',
-  runCommand: 'workflow.toolDisplayName.runCommand',
   searchLocalFiles: 'workflow.toolDisplayName.searchLocalFiles',
   writeLocalFile: 'workflow.toolDisplayName.writeLocalFile',
-  getCommandOutput: 'workflow.toolDisplayName.getCommandOutput',
 
   // Cloud sandbox
   executeCode: 'workflow.toolDisplayName.executeCode',
 
-  // GTD
+  // Codex
+  command_execution: 'workflow.toolDisplayName.runCommand',
+  file_change: 'workflow.toolDisplayName.editLocalFile',
+  mcp_tool_call: 'workflow.toolDisplayName.callMcpTool',
+  todo_list: 'workflow.toolDisplayName.updateTodos',
+  web_search: 'workflow.toolDisplayName.search',
+
+  // Lobe Agent — Plan & Todos
   createPlan: 'workflow.toolDisplayName.createPlan',
   createTodos: 'workflow.toolDisplayName.createTodos',
   updatePlan: 'workflow.toolDisplayName.updatePlan',
   updateTodos: 'workflow.toolDisplayName.updateTodos',
   clearTodos: 'workflow.toolDisplayName.clearTodos',
-  execTask: 'workflow.toolDisplayName.execTask',
-  execTasks: 'workflow.toolDisplayName.execTasks',
+
+  // Lobe Agent — Sub-Agents
+  callSubAgent: 'workflow.toolDisplayName.callSubAgent',
 
   // Memory
   addActivityMemory: 'workflow.toolDisplayName.addActivityMemory',
@@ -198,8 +216,15 @@ export const TOOL_API_DISPLAY_NAMES: Record<string, string> = {
 
   // Misc
   finishOnboarding: 'workflow.toolDisplayName.finishOnboarding',
-  getOnboardingState: 'workflow.toolDisplayName.getOnboardingState',
   getTopicContext: 'workflow.toolDisplayName.getTopicContext',
   listOnlineDevices: 'workflow.toolDisplayName.listOnlineDevices',
   activateDevice: 'workflow.toolDisplayName.activateDevice',
+
+  // Web onboarding
+  saveUserQuestion: 'workflow.toolDisplayName.saveUserQuestion',
+  writeDocument: 'workflow.toolDisplayName.writeDocument',
+
+  // Agent marketplace
+  showAgentMarketplace: 'workflow.toolDisplayName.showAgentMarketplace',
+  submitAgentPick: 'workflow.toolDisplayName.submitAgentPick',
 };

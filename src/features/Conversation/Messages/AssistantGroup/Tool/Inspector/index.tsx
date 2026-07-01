@@ -26,6 +26,8 @@ interface InspectorProps {
    */
   isToolCalling?: boolean;
   result?: { content: string | null; error?: any; state?: any };
+  toolCallId: string;
+  toolCallStartTime?: number;
 }
 
 const Inspectors = memo<InspectorProps>(
@@ -37,6 +39,8 @@ const Inspectors = memo<InspectorProps>(
     intervention,
     isArgumentsStreaming,
     isToolCalling,
+    toolCallId,
+    toolCallStartTime,
   }) => {
     const isPending = intervention?.status === 'pending';
     const isAborted = intervention?.status === 'aborted';
@@ -91,9 +95,14 @@ const Inspectors = memo<InspectorProps>(
               partialArgs={partialJson}
               pluginState={result?.state}
               result={result}
+              toolCallId={toolCallId}
             />
           </SafeBoundary>
-          <ExecutionTime isExecuting={showExecutionTimer} />
+          <ExecutionTime
+            isExecuting={showExecutionTimer}
+            startTime={toolCallStartTime}
+            timerKey={toolCallId}
+          />
         </Flexbox>
       );
     }
@@ -117,7 +126,11 @@ const Inspectors = memo<InspectorProps>(
           isLoading={isTitleLoading}
           partialArgs={partialJson || undefined}
         />
-        <ExecutionTime isExecuting={showExecutionTimer} />
+        <ExecutionTime
+          isExecuting={showExecutionTimer}
+          startTime={toolCallStartTime}
+          timerKey={toolCallId}
+        />
       </Flexbox>
     );
   },

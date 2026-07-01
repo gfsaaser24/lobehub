@@ -11,7 +11,7 @@ import {
   formatMoveResults,
   formatRenameResult,
   formatWriteResult,
-} from '@lobechat/prompts';
+} from '@lobechat/prompts/fileSystem';
 import type { BuiltinServerRuntimeOutput } from '@lobechat/types';
 
 import type {
@@ -298,12 +298,17 @@ export abstract class ComputerRuntime {
       if (!result.success) {
         return this.errorOutput(result, {
           error: result.error?.message,
+          exitCode: result.result?.exitCode ?? result.result?.exit_code,
           isBackground: args.background || false,
+          stderr: result.result?.stderr,
+          stdout: result.result?.stdout,
           success: false,
         });
       }
 
       const r = result.result || {};
+      const commandSuccess = typeof r.success === 'boolean' ? r.success : result.success;
+      const outputFiles = r.outputFiles ?? r.output_files;
 
       const state: RunCommandState = {
         commandId: r.commandId || r.shell_id,
@@ -311,18 +316,20 @@ export abstract class ComputerRuntime {
         exitCode: r.exitCode ?? r.exit_code,
         isBackground: args.background || false,
         output: r.output,
+        outputFiles,
         stderr: r.stderr,
         stdout: r.stdout,
-        success: result.success,
+        success: commandSuccess,
       };
 
       const content = formatCommandResult({
         error: r.error,
         exitCode: r.exitCode ?? r.exit_code,
+        outputFiles,
         shellId: r.commandId || r.shell_id,
         stderr: r.stderr,
         stdout: r.stdout || r.output,
-        success: result.success,
+        success: commandSuccess,
       });
 
       return { content, state, success: true };
@@ -338,25 +345,34 @@ export abstract class ComputerRuntime {
       if (!result.success) {
         return this.errorOutput(result, {
           error: result.error?.message,
-          running: false,
           success: false,
         });
       }
 
       const r = result.result || {};
+      const outputSuccess = typeof r.success === 'boolean' ? r.success : result.success;
+      const outputFiles = r.outputFiles ?? r.output_files;
 
       const state: GetCommandOutputState = {
+        durationMs: r.durationMs ?? r.duration_ms,
         error: r.error,
-        newOutput: r.newOutput || r.output,
+        exitCode: r.exitCode ?? r.exit_code,
+        outputFiles,
         running: r.running ?? false,
-        success: result.success,
+        stderr: r.stderr,
+        stdout: r.stdout,
+        success: outputSuccess,
       };
 
       const content = formatCommandOutput({
+        durationMs: r.durationMs ?? r.duration_ms,
         error: r.error,
+        exitCode: r.exitCode ?? r.exit_code,
         output: r.newOutput || r.output,
-        running: r.running ?? false,
-        success: result.success,
+        outputFiles,
+        stderr: r.stderr,
+        stdout: r.stdout,
+        success: outputSuccess,
       });
 
       return { content, state, success: true };
@@ -377,16 +393,19 @@ export abstract class ComputerRuntime {
         });
       }
 
+      const killSuccess =
+        typeof result.result?.success === 'boolean' ? result.result.success : result.success;
+
       const state: KillCommandState = {
         commandId: args.commandId,
         error: result.result?.error,
-        success: result.success,
+        success: killSuccess,
       };
 
       const content = formatKillResult({
         error: result.result?.error,
         shellId: args.commandId,
-        success: result.success,
+        success: killSuccess,
       });
 
       return { content, state, success: true };
@@ -464,8 +483,25 @@ export abstract class ComputerRuntime {
   }
 
   private errorOutput(result: ServiceResult, state: any): BuiltinServerRuntimeOutput {
+    // Defensive fallback: when a service reports success: false without an
+    // error object, JSON.stringify(undefined) returns the value `undefined`
+    // (not the string "undefined"), which collapsed downstream into an empty
+    // tool-message content while pluginState still got persisted.
+    //
+    // Priority chain:
+    //   1. result.error.message (explicit error from service layer)
+    //   2. JSON.stringify(result.error) (non-Error error objects)
+    //   3. state.stderr (e.g. git commit failure — exit ≠ 0, error in stderr)
+    //   4. state.error (runtime-level error message)
+    //   5. [UNKNOWN_EXEC_ERROR] Tool execution failed (last-resort fallback)
+    const errorText =
+      result.error?.message ||
+      (result.error !== undefined ? JSON.stringify(result.error) : undefined) ||
+      (typeof state?.stderr === 'string' ? state.stderr : undefined) ||
+      (typeof state?.error === 'string' ? state.error : undefined) ||
+      '[UNKNOWN_EXEC_ERROR] Tool execution failed';
     return {
-      content: result.error?.message || JSON.stringify(result.error),
+      content: errorText,
       state,
       success: true,
     };

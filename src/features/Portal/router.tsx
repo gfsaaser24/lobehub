@@ -12,11 +12,14 @@ import { Document } from './Document';
 import { FilePreview } from './FilePreview';
 import { GroupThread } from './GroupThread';
 import { HomeBody, HomeTitle } from './Home';
+import { LocalFile } from './LocalFile';
 import { MessageDetail } from './MessageDetail';
 import { Notebook } from './Notebook';
 import { Plugins } from './Plugins';
+import { TaskDetail } from './TaskDetail';
 import { Thread } from './Thread';
 import { type PortalImpl } from './type';
+import { VerifyResult } from './VerifyResult';
 
 // View type to component mapping
 const VIEW_COMPONENTS: Record<PortalViewType, PortalImpl> = {
@@ -28,10 +31,13 @@ const VIEW_COMPONENTS: Record<PortalViewType, PortalImpl> = {
   [PortalViewType.Document]: Document,
   [PortalViewType.Notebook]: Notebook,
   [PortalViewType.FilePreview]: FilePreview,
+  [PortalViewType.LocalFile]: LocalFile,
   [PortalViewType.MessageDetail]: MessageDetail,
   [PortalViewType.ToolUI]: Plugins,
+  [PortalViewType.TaskDetail]: TaskDetail,
   [PortalViewType.Thread]: Thread,
   [PortalViewType.GroupThread]: GroupThread,
+  [PortalViewType.VerifyResult]: VerifyResult,
 };
 
 // Default Home component

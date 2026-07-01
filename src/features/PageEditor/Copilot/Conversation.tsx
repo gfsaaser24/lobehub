@@ -1,6 +1,6 @@
 import { isChatGroupSessionId } from '@lobechat/types';
 import { Flexbox } from '@lobehub/ui';
-import { memo, useCallback, useEffect, useMemo } from 'react';
+import { memo, useCallback, useMemo } from 'react';
 
 import DragUploadZone, { useUploadFiles } from '@/components/DragUploadZone';
 import { actionMap } from '@/features/ChatInput/ActionBar/config';
@@ -18,8 +18,8 @@ import {
 } from '@/features/Conversation';
 import { useAgentStore } from '@/store/agent';
 import { agentByIdSelectors } from '@/store/agent/selectors';
-import { useChatStore } from '@/store/chat';
 
+import { usePageLockedByOther } from '../usePageLockedByOther';
 import AgentSelectorAction from './AgentSelector/AgentSelectorAction';
 import CopilotModelSelect from './CopilotModelSelect';
 import CopilotToolbar from './Toolbar';
@@ -36,32 +36,13 @@ const Conversation = memo(() => {
   ]);
   const currentAgentId = useConversationStore(conversationSelectors.agentId);
 
-  useEffect(() => {
-    if (!currentAgentId) return;
-
-    if (useAgentStore.getState().activeAgentId !== currentAgentId) {
-      setActiveAgentId(currentAgentId);
-    }
-
-    const { activeAgentId, activeTopicId, switchTopic } = useChatStore.getState();
-
-    if (activeAgentId !== currentAgentId) {
-      useChatStore.setState({ activeAgentId: currentAgentId });
-    }
-
-    // Reset topic on agent/context switch to avoid reusing old topic scope.
-    if (activeAgentId !== currentAgentId || !!activeTopicId) {
-      void switchTopic(null, { scope: 'page', skipRefreshMessage: true });
-    }
-  }, [currentAgentId, setActiveAgentId]);
-
   useFetchAgentConfig(true, currentAgentId);
 
   const model = useAgentStore((s) => agentByIdSelectors.getAgentModelById(currentAgentId)(s));
   const provider = useAgentStore((s) =>
     agentByIdSelectors.getAgentModelProviderById(currentAgentId)(s),
   );
-  const { handleUploadFiles } = useUploadFiles({ model, provider });
+  const { handleUploadFiles } = useUploadFiles({ agentId: currentAgentId, model, provider });
 
   const handleAgentChange = useCallback(
     (id: string) => {
@@ -85,6 +66,10 @@ const Conversation = memo(() => {
 
   const modelSelector = useMemo(() => <CopilotModelSelect />, []);
 
+  // Another member holds the page edit lock → the agent's edits can't be saved,
+  // so block sending until the lock clears. The body LockedAlert explains why.
+  const lockedByOther = usePageLockedByOther();
+
   return (
     <DragUploadZone
       style={{ flex: 1, height: '100%', minWidth: 300 }}
@@ -98,11 +83,12 @@ const Conversation = memo(() => {
         <ChatInput
           actionBarStyle={COMPACT_ACTION_BAR_STYLE}
           allowExpand={false}
+          disableSend={lockedByOther}
           leftActions={EMPTY_LEFT_ACTIONS}
           leftContent={leftContent}
           sendAreaPrefix={modelSelector}
           sendButtonProps={COMPACT_SEND_BUTTON_PROPS}
-          showRuntimeConfig={false}
+          showControlBar={false}
         />
       </Flexbox>
     </DragUploadZone>

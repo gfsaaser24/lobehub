@@ -15,7 +15,7 @@ export type StepContextTodoStatus = 'todo' | 'processing' | 'completed';
 
 /**
  * Todo item structure
- * Duplicated here to avoid circular dependency with builtin-tool-gtd
+ * Duplicated here to avoid circular dependency with builtin-tool-lobe-agent
  */
 export interface StepContextTodoItem {
   status: StepContextTodoStatus;
@@ -88,6 +88,13 @@ export interface RuntimeActiveTopicDocumentContext {
    * Underlying documents.id used by topic page routes.
    */
   documentId: string;
+  /**
+   * Optional send-time document snapshot.
+   *
+   * This lets non-page surfaces, such as an agent-document floating panel,
+   * provide the current document body without enabling PageAgent editor tools.
+   */
+  snapshot?: InitialPageEditorContext;
   /**
    * Human-readable title for model disambiguation.
    */
@@ -175,7 +182,7 @@ export interface RuntimeStepContext {
   stepPageEditor?: StepPageEditorContext;
   /**
    * Current todo list state
-   * Computed from the latest GTD tool message in the conversation
+   * Computed from the latest lobe-agent tool message in the conversation
    */
   todos?: StepContextTodos;
 }

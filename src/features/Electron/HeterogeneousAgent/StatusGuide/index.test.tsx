@@ -26,6 +26,7 @@ vi.mock('@lobehub/ui', () => ({
   Highlighter: ({ children, style }: { children?: ReactNode; style?: React.CSSProperties }) => (
     <pre style={style}>{children}</pre>
   ),
+  Icon: () => <span>Icon</span>,
   Snippet: ({ children, style }: { children?: ReactNode; style?: React.CSSProperties }) => (
     <pre style={style}>{children}</pre>
   ),
@@ -40,7 +41,10 @@ vi.mock('antd-style', () => ({
 }));
 
 vi.mock('lucide-react', () => ({
+  Ban: () => <span>Ban Icon</span>,
   ExternalLink: () => <span>ExternalLink Icon</span>,
+  Loader2: () => <span>Loader Icon</span>,
+  RotateCcw: () => <span>Retry Icon</span>,
   Settings2: () => <span>Settings Icon</span>,
 }));
 
@@ -70,6 +74,11 @@ vi.mock('react-i18next', () => ({
         return `Resets in about ${options?.duration ?? ''}`;
       }
 
+      if (key === 'cliOverloadedGuide.autoRetry.status') {
+        const o = options as { attempt?: number; max?: number; seconds?: number };
+        return `Upstream is temporarily overloaded (not your usage limit) · retry ${o?.attempt ?? 0}/${o?.max ?? 0} in ${o?.seconds ?? 0}s`;
+      }
+
       return (
         (
           {
@@ -81,6 +90,15 @@ vi.mock('react-i18next', () => ({
             'cliAuthGuide.errorDetails': 'Error details',
             'cliAuthGuide.runCommand': 'Run this in Terminal',
             'cliAuthGuide.title': `Sign in to ${options?.name ?? ''}`,
+            'cliOverloadedGuide.actions.retry': 'Retry',
+            'cliOverloadedGuide.autoRetry.actions.cancel': 'Stop auto-retry',
+            'cliOverloadedGuide.autoRetry.actions.retryNow': 'Retry now',
+            'cliOverloadedGuide.autoRetry.title': `${options?.name ?? ''} is busy — retrying automatically…`,
+            'cliOverloadedGuide.desc': `${options?.name ?? ''}'s upstream model service is temporarily overloaded. This usually clears in a moment.`,
+            'cliOverloadedGuide.errorDetails': 'Error details',
+            'cliOverloadedGuide.retryHint':
+              'Wait a few seconds and retry. If it keeps failing, the provider may be having a wider incident.',
+            'cliOverloadedGuide.title': `${options?.name ?? ''} is temporarily overloaded`,
             'cliRateLimitGuide.actions.openSystemTools': 'Open System Tools',
             'cliRateLimitGuide.afterReset':
               'Wait until the reset time, then retry your message. If you are using API authorization, you can also check your provider quota and billing status.',
@@ -255,6 +273,79 @@ describe('HeterogeneousAgentStatusGuide', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('renders overloaded guidance with retry action', () => {
+    const onRetry = vi.fn();
+    render(
+      <HeterogeneousAgentStatusGuide
+        agentType={'claude-code'}
+        error={{
+          agentType: 'claude-code',
+          code: HeterogeneousAgentSessionErrorCode.Overloaded,
+          message:
+            'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+          stderr:
+            'API Error: 529 {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}',
+        }}
+        onRetry={onRetry}
+      />,
+    );
+
+    expect(screen.getByText('Claude Code is temporarily overloaded')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        "Claude Code's upstream model service is temporarily overloaded. This usually clears in a moment.",
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Wait a few seconds and retry. If it keeps failing, the provider may be having a wider incident.',
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText('Error details')).toBeInTheDocument();
+
+    const retryButton = screen.getByRole('button', { name: 'Retry' });
+    retryButton.click();
+    expect(onRetry).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the auto-retry progress state with countdown, retry-now and cancel', () => {
+    const onRetryNow = vi.fn();
+    const onCancel = vi.fn();
+    render(
+      <HeterogeneousAgentStatusGuide
+        agentType={'claude-code'}
+        autoRetry={{ attempt: 2, maxAttempts: 5, onCancel, onRetryNow, secondsLeft: 7 }}
+        error={{
+          agentType: 'claude-code',
+          code: HeterogeneousAgentSessionErrorCode.Overloaded,
+          message: 'API Error: 529 overloaded_error',
+          stderr: 'API Error: 529 overloaded_error',
+        }}
+        onRetry={vi.fn()}
+      />,
+    );
+
+    // Progress copy makes clear it's the upstream (not the user's quota), with
+    // the countdown folded into the same line.
+    expect(screen.getByText('Claude Code is busy — retrying automatically…')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'Upstream is temporarily overloaded (not your usage limit) · retry 2/5 in 7s',
+      ),
+    ).toBeInTheDocument();
+
+    // The static manual-retry card must NOT be shown while auto-retrying, and
+    // the raw error details are hidden to keep the progress card lightweight.
+    expect(screen.queryByText('Claude Code is temporarily overloaded')).not.toBeInTheDocument();
+    expect(screen.queryByText('Error details')).not.toBeInTheDocument();
+
+    screen.getByRole('button', { name: 'Retry now' }).click();
+    expect(onRetryNow).toHaveBeenCalledTimes(1);
+
+    screen.getByRole('button', { name: 'Stop auto-retry' }).click();
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
   it('formats reset time with the active i18n locale instead of the system locale', () => {

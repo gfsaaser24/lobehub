@@ -1,79 +1,66 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router';
 
-import { pluginRegistry } from '@/features/Electron/titlebar/RecentlyViewed/plugins';
+import { isSameTabTarget, resolveTabScopeKey } from '@/features/Electron/titlebar/TabBar/scope';
 import { useElectronStore } from '@/store/electron';
 
-import { getCachedDataForReference } from './cachedData';
+import { resolveTabNavigationAction } from './tabNavigation';
 
-/**
- * Hook to sync route changes with tab state
- * - Does NOT auto-create tabs (tabs are created explicitly via context menu / double-click)
- * - When navigating within an active tab, updates that tab's reference to track current location
- * - Updates tab cache when dynamic title changes
- */
 export const useTabNavigation = () => {
   const location = useLocation();
 
   const activateTab = useElectronStore((s) => s.activateTab);
+  const addTab = useElectronStore((s) => s.addTab);
   const updateTab = useElectronStore((s) => s.updateTab);
   const updateTabCache = useElectronStore((s) => s.updateTabCache);
   const loadTabs = useElectronStore((s) => s.loadTabs);
-  const currentPageTitle = useElectronStore((s) => s.currentPageTitle);
+  const currentRouteMeta = useElectronStore((s) => s.currentRouteMeta);
+  const currentRouteMetaUrl = useElectronStore((s) => s.currentRouteMetaUrl);
 
   const prevLocationRef = useRef<string | null>(null);
-  const loadedRef = useRef(false);
+  const loadedScopeKeyRef = useRef<string | null>(null);
 
-  // Load tabs from localStorage on mount
-  useEffect(() => {
-    if (!loadedRef.current) {
-      loadTabs();
-      loadedRef.current = true;
-    }
-  }, [loadTabs]);
-
-  // Sync route changes to tabs (no auto-creation)
   useEffect(() => {
     const currentUrl = location.pathname + location.search;
+    const currentScopeKey = resolveTabScopeKey(currentUrl);
 
+    if (loadedScopeKeyRef.current !== currentScopeKey) {
+      loadTabs(currentUrl);
+      loadedScopeKeyRef.current = currentScopeKey;
+    }
     if (prevLocationRef.current === currentUrl) return;
     prevLocationRef.current = currentUrl;
 
-    const reference = pluginRegistry.parseUrl(location.pathname, location.search);
-    if (!reference) return;
-
     const { tabs, activeTabId } = useElectronStore.getState();
+    const action = resolveTabNavigationAction({ activeTabId, currentUrl, tabs });
 
-    // If this exact page is already a tab, activate it
-    const existing = tabs.find((t) => t.id === reference.id);
-    if (existing) {
-      if (existing.id !== activeTabId) {
-        activateTab(existing.id);
+    switch (action.type) {
+      case 'activate': {
+        activateTab(action.id);
+        break;
       }
-      return;
+      case 'add': {
+        addTab(action.url);
+        break;
+      }
+      case 'update': {
+        updateTab(action.id, action.url);
+        break;
+      }
     }
+  }, [location.pathname, location.search, activateTab, addTab, updateTab, loadTabs]);
 
-    // If there's an active tab, update it to track the new location
-    if (activeTabId) {
-      const cached = getCachedDataForReference(reference);
-      updateTab(activeTabId, reference, cached);
-    }
-  }, [location.pathname, location.search, activateTab, updateTab]);
-
-  // Update tab cache when dynamic title changes
   useEffect(() => {
-    if (!currentPageTitle) return;
+    if (!currentRouteMeta || !currentRouteMetaUrl) return;
 
-    const { tabs, activeTabId } = useElectronStore.getState();
+    const { activeTabId, tabs } = useElectronStore.getState();
     if (!activeTabId) return;
+    const activeTab = tabs.find((t) => t.id === activeTabId);
+    if (!activeTab) return;
+    if (!isSameTabTarget(activeTab, currentRouteMetaUrl)) return;
 
-    const tab = tabs.find((t) => t.id === activeTabId);
-    if (!tab) return;
-
-    if (tab.cached?.title === currentPageTitle) return;
-
-    updateTabCache(activeTabId, { title: currentPageTitle });
-  }, [currentPageTitle, updateTabCache]);
+    updateTabCache(activeTabId, currentRouteMeta);
+  }, [currentRouteMeta, currentRouteMetaUrl, updateTabCache]);
 };

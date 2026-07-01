@@ -8,6 +8,7 @@ import { useTranslation } from 'react-i18next';
 import { useTaskStore } from '@/store/task';
 import { taskListSelectors } from '@/store/task/selectors';
 
+import type { TaskItemRouteScope } from '../features/AgentTaskItem';
 import AgentTaskItem from '../features/AgentTaskItem';
 import AssigneeAvatar from '../features/AssigneeAvatar';
 import PriorityHighIcon from '../features/icons/PriorityHighIcon';
@@ -24,18 +25,24 @@ import {
   HIDDEN_WHEN_COMPLETED_STATUSES,
   sortGroupEntries,
 } from './listViewOptions';
+import TaskItemSkeleton from './TaskItemSkeleton';
 
 interface TaskListProps {
   onShowHiddenCompleted?: () => void;
   options: TaskListViewOptions;
+  routeScope?: TaskItemRouteScope;
 }
 
 const HIDDEN_COMPLETED_STATUS_SET = new Set<string>(HIDDEN_WHEN_COMPLETED_STATUSES);
 
-const renderTaskRows = (items: ReturnType<typeof taskListSelectors.taskList>, sub?: boolean) =>
+const renderTaskRows = (
+  items: ReturnType<typeof taskListSelectors.taskList>,
+  sub?: boolean,
+  routeScope?: TaskItemRouteScope,
+) =>
   items.map((task, index) => (
     <Fragment key={task.identifier}>
-      <AgentTaskItem task={task} />
+      <AgentTaskItem routeScope={routeScope} task={task} />
       {!sub && index !== items.length - 1 && <Divider dashed style={{ margin: 0 }} />}
     </Fragment>
   ));
@@ -43,9 +50,10 @@ const renderTaskRows = (items: ReturnType<typeof taskListSelectors.taskList>, su
 const renderTaskListBlock = (
   items: ReturnType<typeof taskListSelectors.taskList>,
   sub?: boolean,
+  routeScope?: TaskItemRouteScope,
 ) => (
   <Block gap={sub ? 0 : 2} padding={2} variant={'borderless'}>
-    {renderTaskRows(items, sub)}
+    {renderTaskRows(items, sub, routeScope)}
   </Block>
 );
 
@@ -117,7 +125,7 @@ const renderGroupTitle = (group: TaskGroupMeta, count: number, sub?: boolean) =>
   </Flexbox>
 );
 
-const TaskList = memo<TaskListProps>(({ onShowHiddenCompleted, options }) => {
+const TaskList = memo<TaskListProps>(({ onShowHiddenCompleted, options, routeScope }) => {
   const { t } = useTranslation('chat');
   const tasks = useTaskStore(taskListSelectors.taskList);
   const isInit = useTaskStore(taskListSelectors.isTaskListInit);
@@ -192,7 +200,18 @@ const TaskList = memo<TaskListProps>(({ onShowHiddenCompleted, options }) => {
     });
   }, [effectiveSubGroupBy, groupBy, options, visibleTasks]);
 
-  if (!isInit) return null;
+  if (!isInit) {
+    return (
+      <Block gap={2} padding={2} variant={'borderless'}>
+        {Array.from({ length: 5 }).map((_, index) => (
+          <Fragment key={`task-skeleton-${index}`}>
+            <TaskItemSkeleton />
+            {index !== 4 && <Divider dashed style={{ margin: 0 }} />}
+          </Fragment>
+        ))}
+      </Block>
+    );
+  }
 
   if (tasks.length === 0) {
     return (
@@ -226,7 +245,7 @@ const TaskList = memo<TaskListProps>(({ onShowHiddenCompleted, options }) => {
   if (groupBy === 'none') {
     return (
       <>
-        {renderTaskListBlock(groupedTaskEntries[0]?.items ?? [])}
+        {renderTaskListBlock(groupedTaskEntries[0]?.items ?? [], false, routeScope)}
         {hiddenFooter}
       </>
     );
@@ -262,12 +281,12 @@ const TaskList = memo<TaskListProps>(({ onShowHiddenCompleted, options }) => {
                       paddingInline={14}
                       title={renderGroupTitle(subGroup, subGroupTasks.length, true)}
                     >
-                      {renderTaskListBlock(subGroupTasks, true)}
+                      {renderTaskListBlock(subGroupTasks, true, routeScope)}
                     </AccordionItem>
                   ))}
                 </Accordion>
               ) : (
-                renderTaskListBlock(group.items)
+                renderTaskListBlock(group.items, false, routeScope)
               )}
             </AccordionItem>
           );

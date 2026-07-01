@@ -1,6 +1,6 @@
 'use client';
 
-import { getKlavisServerByServerIdentifier, getLobehubSkillProviderById } from '@lobechat/const';
+import { getComposioAppByIdentifier, getLobehubSkillProviderById } from '@lobechat/const';
 import { ActionIcon, Flexbox, Icon } from '@lobehub/ui';
 import { createStaticStyles } from 'antd-style';
 import { Blocks, X } from 'lucide-react';
@@ -14,7 +14,7 @@ import { useToolStore } from '@/store/tool';
 
 // Bump this id when the banner content changes so dismissing the old
 // variant does not hide the new one.
-export const SKILL_INSTALL_BANNER_ID = 'skill-install-v1';
+export const SKILL_INSTALL_BANNER_ID = 'skill-install-v2';
 
 const ICON_SIZE = 16;
 const AVATAR_SIZE = 24;
@@ -70,30 +70,30 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
 }));
 
 const BANNER_SKILL_IDS = [
-  { id: 'gmail', type: 'klavis' },
-  { id: 'google-drive', type: 'klavis' },
-  { id: 'google-calendar', type: 'klavis' },
-  { id: 'slack', type: 'klavis' },
-  { id: 'notion', type: 'klavis' },
+  { id: 'gmail', type: 'composio' },
+  { id: 'google-drive', type: 'composio' },
+  { id: 'google-calendar', type: 'composio' },
+  { id: 'slack', type: 'composio' },
+  { id: 'notion', type: 'lobehub' },
   { id: 'twitter', type: 'lobehub' },
-  { id: 'github', type: 'klavis' },
+  { id: 'github', type: 'lobehub' },
 ] as const;
 
 const SkillInstallBanner = memo(() => {
   const { t } = useTranslation('plugin');
 
   const isLobehubSkillEnabled = useServerConfigStore(serverConfigSelectors.enableLobehubSkill);
-  const isKlavisEnabled = useServerConfigStore(serverConfigSelectors.enableKlavis);
+  const isComposioEnabled = useServerConfigStore(serverConfigSelectors.enableComposio);
 
   const updateSystemStatus = useGlobalStore((s) => s.updateSystemStatus);
 
   // Prefetch skill connections data so SkillStore opens faster
-  const [useFetchLobehubSkillConnections, useFetchUserKlavisServers] = useToolStore((s) => [
+  const [useFetchLobehubSkillConnections, useFetchUserComposioConnections] = useToolStore((s) => [
     s.useFetchLobehubSkillConnections,
-    s.useFetchUserKlavisServers,
+    s.useFetchUserComposioConnections,
   ]);
   useFetchLobehubSkillConnections(isLobehubSkillEnabled);
-  useFetchUserKlavisServers(isKlavisEnabled);
+  useFetchUserComposioConnections(isComposioEnabled);
 
   const skillIcons = useMemo(() => {
     const icons: Array<{ icon: string | React.ComponentType<{ size?: number }>; key: string }> = [];
@@ -105,7 +105,7 @@ const SkillInstallBanner = memo(() => {
           icons.push({ icon: provider.icon, key: provider.id });
         }
       } else {
-        const server = getKlavisServerByServerIdentifier(skill.id);
+        const server = getComposioAppByIdentifier(skill.id);
         if (server) {
           icons.push({ icon: server.icon, key: server.identifier });
         }

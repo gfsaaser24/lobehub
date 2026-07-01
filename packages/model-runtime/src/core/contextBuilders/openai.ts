@@ -3,8 +3,9 @@ import { Buffer } from 'buffer.js';
 import type OpenAI from 'openai';
 import { toFile } from 'openai';
 
-import { disableStreamModels, systemToUserModels } from '../../const/models';
+import { disableStreamModels, systemToUserModels } from '../../providers/openai/openaiModelId';
 import type { ChatStreamPayload, OpenAIChatMessage, UserMessageContentPart } from '../../types';
+import { isDeepSeekThinkingEligibleModel } from '../../utils/modelParse';
 import { parseDataUri } from '../../utils/uriParser';
 
 export type ExtendedChatCompletionContentPart = {
@@ -17,8 +18,12 @@ export type ExtendedChatCompletionContentPart = {
 type ConvertMessageContentOptions = {
   forceImageBase64?: boolean;
   forceVideoBase64?: boolean;
+  model?: string;
   strictToolPairing?: boolean;
 };
+
+const isDeepSeekModel = (model: string | undefined) =>
+  typeof model === 'string' && model.toLowerCase().includes('deepseek');
 
 type OpenAICompatibleContentPart =
   | ExtendedChatCompletionContentPart
@@ -107,6 +112,23 @@ export const convertOpenAIMessages = async (
       if (msg.reasoning_content !== undefined) result.reasoning_content = msg.reasoning_content;
       // MiniMax uses reasoning_details for historical thinking, so forward it unchanged
       if (msg.reasoning_details !== undefined) result.reasoning_details = msg.reasoning_details;
+
+      // For DeepSeek-family models routed via any OpenAI-compatible runtime
+      // (including custom user providers that bypass the dedicated DeepSeek
+      // handlePayload), derive reasoning_content from the structured reasoning
+      // field on assistant messages and force a placeholder when the model is
+      // thinking-mode eligible.
+      if (msg.role === 'assistant' && isDeepSeekModel(options?.model)) {
+        if (result.reasoning_content === undefined && typeof msg.reasoning?.content === 'string') {
+          result.reasoning_content = msg.reasoning.content;
+        }
+        if (
+          result.reasoning_content === undefined &&
+          isDeepSeekThinkingEligibleModel(options?.model)
+        ) {
+          result.reasoning_content = '';
+        }
+      }
 
       return result;
     }),
@@ -213,6 +235,13 @@ export const convertOpenAIResponseInputs = async (
                   }
                   return { ...c, type: 'input_text' };
                 }
+
+                // Responses API only accepts output_text/refusal inside assistant history.
+                // Multimodal parts are valid as model inputs, not as previous assistant outputs.
+                if (message.role === 'assistant') {
+                  return undefined;
+                }
+
                 if (c.type === 'video_url') {
                   const video = await convertMessageContent(c, options);
                   if (!('video_url' in video) || !video.video_url?.url) {
@@ -237,12 +266,18 @@ export const convertOpenAIResponseInputs = async (
               }),
             );
 
+      const content =
+        typeof processedContent === 'string'
+          ? processedContent
+          : processedContent.filter((m) => m !== undefined);
+
+      if (message.role === 'assistant' && Array.isArray(content) && content.length === 0) {
+        return items;
+      }
+
       const item = {
         ...message,
-        content:
-          typeof processedContent === 'string'
-            ? processedContent
-            : processedContent.filter((m) => m !== undefined),
+        content,
       } as OpenAI.Responses.ResponseInputItem;
 
       // remove reasoning field from the message item

@@ -1,5 +1,5 @@
 import { act, render, screen } from '@testing-library/react';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { describe, expect, it, vi } from 'vitest';
 
 import { useUserStore } from '@/store/user';
@@ -61,6 +61,13 @@ vi.mock('../DataStatistics', () => ({
 vi.mock('@/const/version', () => ({
   isDeprecatedEdition: false,
   isDesktop: false,
+}));
+
+vi.mock('@/store/serverConfig', () => ({
+  serverConfigSelectors: {
+    enableBusinessFeatures: () => false,
+  },
+  useServerConfigStore: (selector: (s: unknown) => unknown) => selector({}),
 }));
 
 describe('PanelContent', () => {

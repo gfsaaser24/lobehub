@@ -6,6 +6,7 @@ import dotenv from 'dotenv';
 import { defineConfig } from 'electron-vite';
 import type { PluginOption, ViteDevServer } from 'vite';
 import { loadEnv } from 'vite';
+import tsconfigPaths from 'vite-tsconfig-paths';
 
 import {
   sharedOptimizeDeps,
@@ -13,7 +14,14 @@ import {
   sharedRendererPlugins,
   sharedRollupOutput,
 } from '../../plugins/vite/sharedRendererConfig';
-import { getExternalDependencies } from './native-deps.config.mjs';
+import { externalRuntimeModules } from './external-runtime-deps.config.mjs';
+import { getNativeExternalDependencies } from './native-deps.config.mjs';
+
+// Renderer dev-server port. Overridable per instance (e.g. one git worktree per
+// concurrent dev instance) via LOBE_DESKTOP_VITE_PORT; `electron-vite dev` injects
+// the matching ELECTRON_RENDERER_URL into the main process automatically. Kept
+// deterministic (still `strictPort`) so the HMR `clientPort` stays in sync.
+const DEV_VITE_PORT = Number(process.env.LOBE_DESKTOP_VITE_PORT) || 5173;
 
 /**
  * Force `base: '/'` in renderer config. The `electron-vite` preset
@@ -87,10 +95,112 @@ function electronDesktopHtmlPlugin(): PluginOption {
   };
 }
 
+const CLOUD_DESKTOP_BUSINESS_FEATURES_FLAG = '__LOBECLOUD_DESKTOP_BUSINESS_FEATURES__';
+const BUSINESS_CONST_MODULE_ID = '@lobechat/business-const';
+const CLOUD_BUSINESS_CONST_MODULE_ID = '@cloud/business-const';
+const DYNAMIC_BUSINESS_CONST_QUERY = '?lobe-cloud-desktop-business-const';
+
+const createBusinessFeaturesBootstrapScript = () =>
+  `globalThis[${JSON.stringify(CLOUD_DESKTOP_BUSINESS_FEATURES_FLAG)}] = true;`;
+
+const replaceBusinessFlagExport = (code: string, name: string, initializer: string) => {
+  const pattern = new RegExp(`export\\s+(?:const|let|var)\\s+${name}\\s*=\\s*[\\s\\S]*?;`);
+
+  return {
+    code: code.replace(pattern, `export let ${name} = ${initializer};`),
+    replaced: pattern.test(code),
+  };
+};
+
+const injectDynamicBusinessFeatureFlag = (code: string) => {
+  const businessFlag = replaceBusinessFlagExport(
+    code,
+    'ENABLE_BUSINESS_FEATURES',
+    `Boolean(globalThis['${CLOUD_DESKTOP_BUSINESS_FEATURES_FLAG}'])`,
+  );
+  const topicLinkFlag = replaceBusinessFlagExport(
+    businessFlag.code,
+    'ENABLE_TOPIC_LINK_SHARE',
+    'ENABLE_BUSINESS_FEATURES',
+  );
+
+  if (!businessFlag.replaced) {
+    throw new Error('Cannot find ENABLE_BUSINESS_FEATURES export in @cloud/business-const');
+  }
+
+  const topicLinkAssignment = topicLinkFlag.replaced
+    ? '\n  ENABLE_TOPIC_LINK_SHARE = enabled;'
+    : '';
+
+  return `${topicLinkFlag.code}
+
+const __lobeCloudDesktopBusinessFeaturesFlagKey = '${CLOUD_DESKTOP_BUSINESS_FEATURES_FLAG}';
+const __lobeCloudDesktopApplyBusinessFeaturesFlag = (value) => {
+  const enabled = Boolean(value);
+  ENABLE_BUSINESS_FEATURES = enabled;${topicLinkAssignment}
+  return enabled;
+};
+
+const __lobeCloudDesktopExistingDescriptor = Object.getOwnPropertyDescriptor(
+  globalThis,
+  __lobeCloudDesktopBusinessFeaturesFlagKey,
+);
+const __lobeCloudDesktopInitialValue = __lobeCloudDesktopExistingDescriptor?.get
+  ? __lobeCloudDesktopExistingDescriptor.get.call(globalThis)
+  : globalThis[__lobeCloudDesktopBusinessFeaturesFlagKey];
+
+Object.defineProperty(globalThis, __lobeCloudDesktopBusinessFeaturesFlagKey, {
+  configurable: true,
+  get() {
+    return ENABLE_BUSINESS_FEATURES;
+  },
+  set(value) {
+    __lobeCloudDesktopApplyBusinessFeaturesFlag(value);
+  },
+});
+
+__lobeCloudDesktopApplyBusinessFeaturesFlag(__lobeCloudDesktopInitialValue);
+`;
+};
+
+function cloudDesktopBusinessConstPlugin(): PluginOption {
+  return {
+    enforce: 'pre',
+    async resolveId(id, importer) {
+      if (id !== BUSINESS_CONST_MODULE_ID) return;
+
+      const resolved = await this.resolve(CLOUD_BUSINESS_CONST_MODULE_ID, importer, {
+        skipSelf: true,
+      });
+      if (!resolved) throw new Error(`Cannot resolve ${CLOUD_BUSINESS_CONST_MODULE_ID}`);
+
+      return `${resolved.id}${DYNAMIC_BUSINESS_CONST_QUERY}`;
+    },
+    load(id) {
+      if (!id.endsWith(DYNAMIC_BUSINESS_CONST_QUERY)) return;
+
+      const sourcePath = id.slice(0, -DYNAMIC_BUSINESS_CONST_QUERY.length);
+      return injectDynamicBusinessFeatureFlag(readFileSync(sourcePath, 'utf8'));
+    },
+    name: 'lobe-cloud-desktop-business-const',
+    transformIndexHtml() {
+      return [
+        {
+          children: createBusinessFeaturesBootstrapScript(),
+          injectTo: 'head-prepend',
+          tag: 'script',
+        },
+      ];
+    },
+  };
+}
+
 dotenv.config();
 
 const isDev = process.env.NODE_ENV === 'development';
 const ROOT_DIR = path.resolve(__dirname, '../..');
+const CLOUD_ROOT_DIR = path.resolve(__dirname, '../../..');
+const isCloudDesktopBuild = process.env.CLOUD_DESKTOP === '1';
 const mode = process.env.NODE_ENV === 'production' ? 'production' : 'development';
 
 Object.assign(process.env, loadEnv(mode, ROOT_DIR, ''));
@@ -99,9 +209,22 @@ const desktopPackageJson = JSON.parse(
   readFileSync(path.resolve(__dirname, 'package.json'), 'utf8'),
 ) as { version: string };
 const electronRuntimeExternals = ['electron'];
-const mainProcessRuntimeExternals = [...electronRuntimeExternals, 'node-mac-permissions'];
+const mainProcessRuntimeExternals = [
+  ...electronRuntimeExternals,
+  ...externalRuntimeModules,
+  'node-mac-permissions',
+];
+const externalNavigationHosts =
+  process.env.DESKTOP_EXTERNAL_NAVIGATION_HOSTS ?? (isCloudDesktopBuild ? 'stripe.com' : '');
 
 console.info(`[electron-vite.config.ts] Detected UPDATE_CHANNEL: ${updateChannel}`);
+console.info(`[electron-vite.config.ts] Cloud desktop build: ${isCloudDesktopBuild}`);
+
+const cloudTsconfigPathsPlugin = () =>
+  ({
+    ...tsconfigPaths({ projects: [path.resolve(CLOUD_ROOT_DIR, 'tsconfig.json')] }),
+    name: 'lobe-cloud-desktop-tsconfig-paths',
+  }) satisfies PluginOption;
 
 export default defineConfig({
   main: {
@@ -113,15 +236,43 @@ export default defineConfig({
         // bufferutil and utf-8-validate are optional peer deps of ws that may not be installed.
         external: [
           ...mainProcessRuntimeExternals,
-          ...getExternalDependencies(),
+          ...getNativeExternalDependencies(),
           'bufferutil',
           'utf-8-validate',
         ],
         output: {
-          // Prevent debug package from being bundled into index.js to avoid side-effect pollution
+          // Prevent shared deps from being bundled into index.js to avoid side-effect pollution.
+          // Pattern: when a module is imported by both the main bundle (statically) and a
+          // dynamic-import chunk (lazy loader), rolldown places it in main and makes the
+          // chunk back-reference `require("./index.js")`. Electron's main entry isn't in
+          // Node's CJS cache, so that require recompiles `index.js` from scratch — which
+          // re-runs `new App()` at top-level and triggers `protocol.registerSchemesAsPrivileged`
+          // *after* the app is ready → throw.
+          //
+          // Same root cause as the original `debug` regression fixed in #11827. Isolate
+          // each shared module into its own vendor chunk so both ends reference the vendor
+          // chunk instead of back-referencing main.
           manualChunks(id) {
             if (id.includes('node_modules/debug')) {
               return 'vendor-debug';
+            }
+
+            // Small text/binary detection utilities in file-loaders/utils. Imported by
+            // main (via `sniffBinaryFile`) and potentially by lazy loader chunks.
+            // Explicitly enumerated to avoid catching `parser-utils.ts`, which pulls in
+            // xmldom / yauzl / concat-stream — those belong in docx/pptx loader chunks.
+            if (
+              /packages\/file-loaders\/src\/utils\/(?:detectUtf16|isBinaryContent|isTextReadableFile)\.ts$/.test(
+                id,
+              )
+            ) {
+              return 'vendor-file-loaders-utils';
+            }
+
+            // jszip — imported by main (via some static path) AND by the docx loader chunk.
+            // Without this, reading a .docx file throws the protocol re-init error.
+            if (id.includes('node_modules/jszip')) {
+              return 'vendor-jszip';
             }
 
             // Split i18n json resources by namespace (ns), not by locale.
@@ -136,6 +287,7 @@ export default defineConfig({
       sourcemap: isDev ? 'inline' : false,
     },
     define: {
+      'process.env.DESKTOP_EXTERNAL_NAVIGATION_HOSTS': JSON.stringify(externalNavigationHosts),
       'process.env.UPDATE_CHANNEL': JSON.stringify(process.env.UPDATE_CHANNEL),
       'process.env.UPDATE_SERVER_URL': JSON.stringify(process.env.UPDATE_SERVER_URL),
     },
@@ -181,6 +333,8 @@ export default defineConfig({
     },
     optimizeDeps: sharedOptimizeDeps,
     plugins: [
+      isCloudDesktopBuild && cloudTsconfigPathsPlugin(),
+      isCloudDesktopBuild && cloudDesktopBusinessConstPlugin(),
       forceAbsoluteBasePlugin(),
       electronDesktopHtmlPlugin(),
       vanillaExtractPlugin(),
@@ -188,7 +342,24 @@ export default defineConfig({
     ],
     resolve: {
       dedupe: ['react', 'react-dom'],
-      tsconfigPaths: true,
+      tsconfigPaths: !isCloudDesktopBuild,
+    },
+    // In dev the BrowserWindow loads `app://renderer/` and the Electron main process
+    // proxies non-backend requests to this Vite dev server via `net.fetch`. The HMR
+    // WebSocket still connects directly (browser → ws://localhost:<port>) — so the
+    // port MUST be deterministic. `strictPort` fails fast on conflict instead of
+    // silently sliding, and `clientPort` baked into the HMR injection has to match.
+    server: {
+      hmr: {
+        clientPort: DEV_VITE_PORT,
+        host: '127.0.0.1',
+        protocol: 'ws',
+      },
+      // Force IPv4 so main-process `fetch` skips happy-eyeballs dual-stack
+      // attempts that surface as ETIMEDOUT under cold-start request bursts.
+      host: '127.0.0.1',
+      port: DEV_VITE_PORT,
+      strictPort: true,
     },
   },
 });

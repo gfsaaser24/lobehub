@@ -361,6 +361,51 @@ describe('UpdaterManager', () => {
     });
   });
 
+  describe('captureRestoreRoute', () => {
+    const callCapture = () => (updaterManager as any).captureRestoreRoute();
+
+    it('stores the derived route from the main window URL', () => {
+      (mockApp.browserManager.getMainWindow as any).mockReturnValue({
+        webContents: { getURL: () => 'app://renderer/agent/abc' },
+      });
+
+      callCapture();
+
+      expect(mockApp.storeManager.set).toHaveBeenCalledWith('pendingRestoreRoute', '/agent/abc');
+    });
+
+    it('stores nothing when the URL is not a restorable route', () => {
+      (mockApp.browserManager.getMainWindow as any).mockReturnValue({
+        webContents: { getURL: () => 'app://renderer/' },
+      });
+
+      callCapture();
+
+      expect(mockApp.storeManager.set).not.toHaveBeenCalled();
+    });
+
+    it('stores nothing when there is no webContents', () => {
+      (mockApp.browserManager.getMainWindow as any).mockReturnValue({ webContents: null });
+
+      callCapture();
+
+      expect(mockApp.storeManager.set).not.toHaveBeenCalled();
+    });
+
+    it('does not throw when reading the URL fails', () => {
+      (mockApp.browserManager.getMainWindow as any).mockReturnValue({
+        webContents: {
+          getURL: () => {
+            throw new Error('boom');
+          },
+        },
+      });
+
+      expect(() => callCapture()).not.toThrow();
+      expect(mockApp.storeManager.set).not.toHaveBeenCalled();
+    });
+  });
+
   describe('installLater', () => {
     it('should set autoInstallOnAppQuit to true', () => {
       updaterManager.installLater();
@@ -372,6 +417,92 @@ describe('UpdaterManager', () => {
       updaterManager.installLater();
 
       expect(mockBroadcast).toHaveBeenCalledWith('updateWillInstallLater');
+    });
+  });
+
+  describe('install-later session guard', () => {
+    beforeEach(async () => {
+      await updaterManager.initialize();
+      vi.mocked(autoUpdater.downloadUpdate).mockResolvedValue([] as any);
+    });
+
+    const fireDownloaded = (version: string) => {
+      registeredEvents.get('update-downloaded')?.({ version });
+    };
+    const fireAvailable = (version: string) => {
+      registeredEvents.get('update-available')?.({ version });
+    };
+
+    it('suppresses re-broadcast of updateDownloaded for the install-later version', () => {
+      fireDownloaded('2.2.6');
+      expect(mockBroadcast).toHaveBeenCalledWith(
+        'updateDownloaded',
+        expect.objectContaining({ version: '2.2.6' }),
+      );
+
+      updaterManager.installLater();
+
+      mockBroadcast.mockClear();
+      fireDownloaded('2.2.6');
+
+      expect(mockBroadcast).not.toHaveBeenCalledWith('updateDownloaded', expect.anything());
+      expect(mockBroadcast).toHaveBeenCalledWith(
+        'updaterStateChanged',
+        expect.objectContaining({ stage: 'downloaded' }),
+      );
+    });
+
+    it('skips auto-download on update-available for the install-later version', () => {
+      fireDownloaded('2.2.6');
+      updaterManager.installLater();
+
+      vi.mocked(autoUpdater.downloadUpdate).mockClear();
+
+      fireAvailable('2.2.6');
+
+      expect(autoUpdater.downloadUpdate).not.toHaveBeenCalled();
+    });
+
+    it('clears the guard and re-broadcasts when a newer version arrives', () => {
+      fireDownloaded('2.2.6');
+      updaterManager.installLater();
+      mockBroadcast.mockClear();
+
+      fireAvailable('2.2.7');
+      fireDownloaded('2.2.7');
+
+      expect(mockBroadcast).toHaveBeenCalledWith(
+        'updateDownloaded',
+        expect.objectContaining({ version: '2.2.7' }),
+      );
+    });
+
+    it('keeps the guard when an older version arrives', () => {
+      fireDownloaded('2.2.6');
+      updaterManager.installLater();
+      mockBroadcast.mockClear();
+
+      fireDownloaded('2.2.5');
+
+      expect(mockBroadcast).not.toHaveBeenCalledWith(
+        'updateDownloaded',
+        expect.objectContaining({ version: '2.2.5' }),
+      );
+    });
+
+    it('clears the guard on channel switch', () => {
+      fireDownloaded('2.2.6');
+      updaterManager.installLater();
+
+      updaterManager.switchChannel('canary');
+
+      mockBroadcast.mockClear();
+      fireDownloaded('2.2.6');
+
+      expect(mockBroadcast).toHaveBeenCalledWith(
+        'updateDownloaded',
+        expect.objectContaining({ version: '2.2.6' }),
+      );
     });
   });
 

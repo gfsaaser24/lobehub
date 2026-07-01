@@ -1,4 +1,4 @@
-import type { TaskDetailData } from '@lobechat/types';
+import type { TaskDetailData, TaskVerifyConfig } from '@lobechat/types';
 
 import type { TaskStoreState } from '../initialState';
 
@@ -20,11 +20,15 @@ const activeTaskPriority = (s: TaskStoreState) => activeTaskDetail(s)?.priority 
 
 const activeTaskInstruction = (s: TaskStoreState) => activeTaskDetail(s)?.instruction;
 
+const activeTaskEditorData = (s: TaskStoreState) => activeTaskDetail(s)?.editorData;
+
+const activeTaskFiles = (s: TaskStoreState) => activeTaskDetail(s)?.files;
+
 const activeTaskDescription = (s: TaskStoreState) => activeTaskDetail(s)?.description;
 
 const activeTaskAgentId = (s: TaskStoreState) => activeTaskDetail(s)?.agentId;
 
-// TODO [LOBE-6634]: Once the backend getTaskDetail returns model/provider, read from detail.model / detail.provider instead
+// TODO: Once the frontend store switches to reading from detail.model / detail.provider returned by the backend getTaskDetail procedure
 const activeTaskModel = (s: TaskStoreState) =>
   activeTaskDetail(s)?.config?.model as string | undefined;
 
@@ -56,9 +60,17 @@ const activeTaskScheduleMaxExecutions = (s: TaskStoreState) =>
 
 const activeTaskCheckpoint = (s: TaskStoreState) => activeTaskDetail(s)?.checkpoint;
 
-const activeTaskReview = (s: TaskStoreState) => activeTaskDetail(s)?.review;
+// Read the RESOLVED verify config that getTaskDetail populates via
+// TaskModel.getVerifyConfig (which includes the legacy `config.review` fallback
+// during migration) — not the raw `config.verify`. Reading raw config.verify
+// would return undefined for a legacy review-only task, so the panel would open
+// as unconfigured and the first autosave could clobber the old settings.
+const activeTaskVerifyConfig = (s: TaskStoreState): TaskVerifyConfig | undefined =>
+  activeTaskDetail(s)?.verify ?? undefined;
 
 const activeTaskWorkspace = (s: TaskStoreState) => activeTaskDetail(s)?.workspace ?? [];
+
+const activeTaskWorkspaceId = (s: TaskStoreState) => activeTaskDetail(s)?.workspaceId;
 
 const activeTaskError = (s: TaskStoreState) => activeTaskDetail(s)?.error;
 
@@ -85,10 +97,7 @@ const taskSaveStatus = (s: TaskStoreState) => s.taskSaveStatus;
 
 const activeTopicDrawerTopicId = (s: TaskStoreState) => s.activeTopicDrawerTopicId;
 
-const activePageModalId = (s: TaskStoreState) => s.activePageModalId;
-
 export const taskDetailSelectors = {
-  activePageModalId,
   activeTaskAgentId,
   activeTaskAutomationMode,
   activeTaskCheckpoint,
@@ -96,7 +105,9 @@ export const taskDetailSelectors = {
   activeTaskDependencies,
   activeTaskDescription,
   activeTaskDetail,
+  activeTaskEditorData,
   activeTaskError,
+  activeTaskFiles,
   activeTaskId,
   activeTaskInstruction,
   activeTaskName,
@@ -104,14 +115,15 @@ export const taskDetailSelectors = {
   activeTaskPeriodicInterval,
   activeTaskPriority,
   activeTaskProvider,
-  activeTaskReview,
   activeTaskScheduleMaxExecutions,
   activeTaskSchedulePattern,
   activeTaskScheduleTimezone,
   activeTaskStatus,
   activeTaskSubtasks,
   activeTaskTopicCount,
+  activeTaskVerifyConfig,
   activeTaskWorkspace,
+  activeTaskWorkspaceId,
   activeTopicDrawerTopicId,
   canCancelActiveTask,
   canPauseActiveTask,

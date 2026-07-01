@@ -7,13 +7,14 @@ import {
   Icon,
   Text,
 } from '@lobehub/ui';
-import { App } from 'antd';
+import { confirmModal } from '@lobehub/ui/base-ui';
 import { cssVar } from 'antd-style';
 import { Check, ChevronDownIcon, ChevronUpIcon, MoreHorizontal, Trash } from 'lucide-react';
 import { memo, useCallback, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import BriefCardActions from '@/features/DailyBrief/BriefCardActions';
+import BriefCardArtifacts from '@/features/DailyBrief/BriefCardArtifacts';
 import BriefCardSummary from '@/features/DailyBrief/BriefCardSummary';
 import BriefIcon from '@/features/DailyBrief/BriefIcon';
 import { styles as briefStyles } from '@/features/DailyBrief/style';
@@ -31,15 +32,13 @@ interface TaskBriefCardProps {
 const TaskBriefCard = memo<TaskBriefCardProps>(
   ({ brief, onAfterResolve, onAfterAddComment, onAfterDelete }) => {
     const { t } = useTranslation('home');
-    const { modal } = App.useApp();
     const deleteBrief = useBriefStore((s) => s.deleteBrief);
     const isResolved = Boolean(brief.resolvedAction);
     const [expanded, setExpanded] = useState(false);
     const showFull = !isResolved || expanded;
 
     const handleDelete = useCallback(() => {
-      modal.confirm({
-        centered: true,
+      confirmModal({
         content: t('brief.deleteConfirm.content'),
         okButtonProps: { danger: true },
         okText: t('brief.deleteConfirm.ok'),
@@ -48,9 +47,8 @@ const TaskBriefCard = memo<TaskBriefCardProps>(
           await onAfterDelete?.();
         },
         title: t('brief.deleteConfirm.title'),
-        type: 'error',
       });
-    }, [brief.id, deleteBrief, modal, onAfterDelete, t]);
+    }, [brief.id, deleteBrief, onAfterDelete, t]);
 
     const menuItems = useMemo<DropdownItem[]>(
       () => [
@@ -101,12 +99,15 @@ const TaskBriefCard = memo<TaskBriefCardProps>(
         {showFull && (
           <>
             <BriefCardSummary summary={brief.summary} />
+            <BriefCardArtifacts artifacts={brief.artifacts} />
             <BriefCardActions
               actions={brief.actions}
               briefId={brief.id}
               briefType={brief.type}
               resolvedAction={brief.resolvedAction}
               taskId={brief.taskId}
+              taskStatus={brief.taskStatus}
+              topicId={brief.topicId}
               onAfterAddComment={onAfterAddComment}
               onAfterResolve={onAfterResolve}
             />

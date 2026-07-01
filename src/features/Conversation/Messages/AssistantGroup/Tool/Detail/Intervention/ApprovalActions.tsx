@@ -1,7 +1,8 @@
-import { Button, DropdownMenu, Flexbox, Popover } from '@lobehub/ui';
-import { Input, Space } from 'antd';
-import { ChevronDown } from 'lucide-react';
-import { memo, useState } from 'react';
+import { Button, Flexbox } from '@lobehub/ui';
+import { createStaticStyles, cx } from 'antd-style';
+import { CornerDownLeft } from 'lucide-react';
+import type { KeyboardEvent as ReactKeyboardEvent } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { useUserStore } from '@/store/user';
@@ -23,16 +24,125 @@ interface ApprovalActionsProps {
   toolCallId: string;
 }
 
-const ApprovalActions = memo<ApprovalActionsProps>(
-  ({ approvalMode, messageId, identifier, apiName, onBeforeApprove, assistantGroupId }) => {
-    const { t } = useTranslation(['chat', 'common']);
-    const [rejectReason, setRejectReason] = useState('');
-    const [rejectPopoverOpen, setRejectPopoverOpen] = useState(false);
-    const [rejectLoading, setRejectLoading] = useState(false);
-    const [approveLoading, setApproveLoading] = useState(false);
+type Choice = 'approve' | 'approve-remember' | 'reject';
 
-    // Disable actions while message is still being created (temp ID)
+const styles = createStaticStyles(({ css, cssVar }) => ({
+  container: css`
+    width: 100%;
+  `,
+  footer: css`
+    display: flex;
+    justify-content: flex-end;
+    margin-block-start: 8px;
+  `,
+  number: css`
+    flex-shrink: 0;
+    width: 18px;
+    font-variant-numeric: tabular-nums;
+    color: ${cssVar.colorTextTertiary};
+  `,
+  option: css`
+    cursor: pointer;
+
+    display: flex;
+    gap: 8px;
+    align-items: center;
+
+    min-height: 40px;
+    padding-block: 7px;
+    padding-inline: 16px;
+    border-radius: calc(${cssVar.borderRadiusLG} - 2px);
+
+    color: ${cssVar.colorTextSecondary};
+
+    transition:
+      background 120ms,
+      color 120ms;
+
+    &:hover {
+      color: ${cssVar.colorText};
+      background: ${cssVar.colorFillTertiary};
+    }
+  `,
+  optionLabel: css`
+    flex: 1;
+    line-height: 1.4;
+  `,
+  optionList: css`
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  `,
+  optionSelected: css`
+    color: ${cssVar.colorText};
+    background: ${cssVar.colorFillSecondary};
+
+    &:hover {
+      background: ${cssVar.colorFillSecondary};
+    }
+  `,
+  rejectInput: css`
+    flex: 1;
+
+    width: 100%;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+
+    font-family: inherit;
+    font-size: 14px;
+    line-height: 1.4;
+    color: ${cssVar.colorText};
+
+    background: transparent;
+
+    &::placeholder {
+      color: ${cssVar.colorTextSecondary};
+    }
+
+    &:focus,
+    &:focus-visible {
+      outline: none;
+    }
+
+    &:disabled {
+      cursor: pointer;
+      color: ${cssVar.colorTextSecondary};
+    }
+  `,
+  shortcutHint: css`
+    display: inline-flex;
+    align-items: center;
+    margin-inline-start: 6px;
+    color: ${cssVar.colorTextTertiary};
+  `,
+  submitButton: css`
+    &.ant-btn {
+      min-width: 88px;
+      height: 36px;
+      border-radius: calc(${cssVar.borderRadiusLG} - 2px);
+    }
+  `,
+}));
+
+const ApprovalActions = memo<ApprovalActionsProps>(
+  ({ approvalMode, apiName, assistantGroupId, identifier, messageId, onBeforeApprove }) => {
+    const { t } = useTranslation('chat');
+    const [choice, setChoice] = useState<Choice>('approve');
+    const [reason, setReason] = useState('');
+    const [loading, setLoading] = useState(false);
+    const rejectInputRef = useRef<HTMLInputElement>(null);
+
     const isMessageCreating = messageId.startsWith('tmp_');
+    const isAllowListMode = approvalMode === 'allow-list';
+
+    // Ordered choices drive both the numbered rows and the 1/2/3 shortcuts.
+    // "Approve & don't ask again" is a first-class option (allow-list only)
+    // rather than a checkbox nested under approve.
+    const choices = useMemo<Choice[]>(
+      () => (isAllowListMode ? ['approve', 'approve-remember', 'reject'] : ['approve', 'reject']),
+      [isAllowListMode],
+    );
 
     const [approveToolCall, rejectAndContinueToolCall] = useConversationStore((s) => [
       s.approveToolCall,
@@ -40,113 +150,178 @@ const ApprovalActions = memo<ApprovalActionsProps>(
     ]);
     const addToolToAllowList = useUserStore((s) => s.addToolToAllowList);
 
-    const handleApprove = async (remember?: boolean) => {
-      setApproveLoading(true);
+    const handleSubmit = useCallback(async () => {
+      if (loading || isMessageCreating) return;
+      setLoading(true);
       try {
-        if (onBeforeApprove) {
-          await onBeforeApprove();
-        }
-
-        await approveToolCall(messageId, assistantGroupId ?? '');
-
-        if (remember) {
-          const toolKey = `${identifier}/${apiName}`;
-          await addToolToAllowList(toolKey);
+        if (choice === 'reject') {
+          await rejectAndContinueToolCall(messageId, reason.trim() || undefined);
+        } else {
+          if (onBeforeApprove) await onBeforeApprove();
+          await approveToolCall(messageId, assistantGroupId ?? '');
+          if (isAllowListMode && choice === 'approve-remember') {
+            await addToolToAllowList(`${identifier}/${apiName}`);
+          }
         }
       } finally {
-        setApproveLoading(false);
+        setLoading(false);
+      }
+    }, [
+      addToolToAllowList,
+      apiName,
+      approveToolCall,
+      assistantGroupId,
+      choice,
+      identifier,
+      isAllowListMode,
+      isMessageCreating,
+      loading,
+      messageId,
+      onBeforeApprove,
+      reason,
+      rejectAndContinueToolCall,
+    ]);
+
+    // When choice flips to reject (via click on row, '2', or arrow), pull focus
+    // into the inline input so the user can start typing the reason immediately.
+    useEffect(() => {
+      if (choice === 'reject') {
+        rejectInputRef.current?.focus();
+      }
+    }, [choice]);
+
+    // Window-level keyboard: 1/2/↑/↓ to switch, Enter to submit. Skip while
+    // typing anywhere on the page so we never hijack the main chat composer.
+    // The reject input has its own onKeyDown for Enter / ↑.
+    useEffect(() => {
+      const handler = (e: KeyboardEvent) => {
+        const target = e.target as HTMLElement | null;
+        if (target) {
+          const tag = target.tagName;
+          if (tag === 'INPUT' || tag === 'TEXTAREA' || target.isContentEditable) return;
+        }
+        if (e.metaKey || e.ctrlKey || e.altKey) return;
+        // Digit keys select the matching numbered row directly.
+        if (/^[1-9]$/.test(e.key)) {
+          const next = choices[Number(e.key) - 1];
+          if (next) {
+            e.preventDefault();
+            setChoice(next);
+          }
+          return;
+        }
+        switch (e.key) {
+          case 'ArrowUp':
+          case 'ArrowDown': {
+            e.preventDefault();
+            setChoice((c) => {
+              const idx = choices.indexOf(c);
+              const delta = e.key === 'ArrowUp' ? -1 : 1;
+              const nextIdx = (idx + delta + choices.length) % choices.length;
+              return choices[nextIdx];
+            });
+            break;
+          }
+          case 'Enter': {
+            if (e.shiftKey) return;
+            e.preventDefault();
+            void handleSubmit();
+            break;
+          }
+          // No default
+        }
+      };
+      window.addEventListener('keydown', handler);
+      return () => {
+        window.removeEventListener('keydown', handler);
+      };
+    }, [choices, handleSubmit]);
+
+    const handleRejectInputKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        void handleSubmit();
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        const idx = choices.indexOf('reject');
+        const prev = choices[idx - 1];
+        if (prev) setChoice(prev);
+        rejectInputRef.current?.blur();
       }
     };
 
-    const handleReject = async (reason?: string) => {
-      setRejectLoading(true);
-      await rejectAndContinueToolCall(messageId, reason);
-      setRejectLoading(false);
-      setRejectPopoverOpen(false);
-      setRejectReason('');
+    const rejectNumber = choices.indexOf('reject') + 1;
+
+    const approveLabel: Record<'approve' | 'approve-remember', string> = {
+      'approve': t('tool.intervention.optionApprove'),
+      'approve-remember': t('tool.intervention.optionApproveRemember'),
     };
 
     return (
-      <Flexbox horizontal gap={8}>
-        <Popover
-          open={rejectPopoverOpen}
-          placement="bottomRight"
-          trigger="click"
-          content={
-            <Flexbox gap={12} style={{ width: 400 }}>
-              <Flexbox horizontal align={'center'} justify={'space-between'}>
-                <div>{t('tool.intervention.rejectTitle')}</div>
-
-                <Button
-                  loading={rejectLoading}
-                  size="small"
-                  type="primary"
-                  onClick={() => handleReject(rejectReason)}
+      <Flexbox className={styles.container}>
+        <div className={styles.optionList} role="radiogroup">
+          {choices.map((c, index) => {
+            if (c === 'reject') {
+              return (
+                <div
+                  aria-checked={choice === 'reject'}
+                  className={cx(styles.option, choice === 'reject' && styles.optionSelected)}
+                  key={c}
+                  role="radio"
+                  onClick={() => {
+                    setChoice('reject');
+                    rejectInputRef.current?.focus();
+                  }}
                 >
-                  {t('tool.intervention.rejectAndContinue')}
-                </Button>
-              </Flexbox>
-              <Input.TextArea
-                autoFocus
-                placeholder={t('tool.intervention.rejectReasonPlaceholder')}
-                rows={3}
-                value={rejectReason}
-                variant={'filled'}
-                onChange={(e) => setRejectReason(e.target.value)}
-              />
-            </Flexbox>
-          }
-          onOpenChange={(open) => {
-            if (rejectLoading) return;
+                  <span className={styles.number}>{rejectNumber}.</span>
+                  <input
+                    aria-label={t('tool.intervention.rejectReasonPlaceholder')}
+                    className={styles.rejectInput}
+                    disabled={loading || isMessageCreating}
+                    placeholder={t('tool.intervention.rejectReasonPlaceholder')}
+                    ref={rejectInputRef}
+                    type="text"
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    onFocus={() => setChoice('reject')}
+                    onKeyDown={handleRejectInputKeyDown}
+                  />
+                </div>
+              );
+            }
 
-            setRejectPopoverOpen(open);
-          }}
-        >
-          <Button color={'default'} disabled={isMessageCreating} size="small" variant={'filled'}>
-            {t('tool.intervention.reject')}
-          </Button>
-        </Popover>
+            return (
+              <div
+                aria-checked={choice === c}
+                className={cx(styles.option, choice === c && styles.optionSelected)}
+                key={c}
+                role="radio"
+                onClick={() => setChoice(c)}
+              >
+                <span className={styles.number}>{index + 1}.</span>
+                <span className={styles.optionLabel}>{approveLabel[c]}</span>
+              </div>
+            );
+          })}
+        </div>
 
-        {approvalMode === 'allow-list' ? (
-          <Space.Compact>
-            <Button
-              disabled={isMessageCreating}
-              loading={approveLoading}
-              size="small"
-              type="primary"
-              onClick={() => handleApprove(true)}
-            >
-              {t('tool.intervention.approveAndRemember')}
-            </Button>
-            <DropdownMenu
-              items={[
-                {
-                  disabled: approveLoading || isMessageCreating,
-                  key: 'once',
-                  label: t('tool.intervention.approveOnce'),
-                  onClick: () => handleApprove(false),
-                },
-              ]}
-            >
-              <Button
-                disabled={approveLoading || isMessageCreating}
-                icon={ChevronDown}
-                size="small"
-                type="primary"
-              />
-            </DropdownMenu>
-          </Space.Compact>
-        ) : (
+        <div className={styles.footer}>
           <Button
+            className={styles.submitButton}
             disabled={isMessageCreating}
-            loading={approveLoading}
-            size="small"
-            type="primary"
-            onClick={() => handleApprove()}
+            loading={loading}
+            size={'middle'}
+            type={'primary'}
+            onClick={handleSubmit}
           >
-            {t('tool.intervention.approve')}
+            {t('tool.intervention.submit')}
+            <span className={styles.shortcutHint}>
+              <CornerDownLeft size={12} />
+            </span>
           </Button>
-        )}
+        </div>
       </Flexbox>
     );
   },

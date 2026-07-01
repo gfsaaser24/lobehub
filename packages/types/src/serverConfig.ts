@@ -7,7 +7,7 @@ import type {
   GlobalLLMProviderKey,
   UserDefaultAgent,
   UserImageConfig,
-  UserSystemAgentConfig,
+  UserServiceModelConfig,
 } from './user/settings';
 
 export type GlobalMemoryLayer = 'activity' | 'context' | 'experience' | 'identity' | 'preference';
@@ -34,6 +34,11 @@ export interface GlobalMemoryConfig {
   userMemory?: GlobalMemoryExtractionConfig;
 }
 
+export interface VisualUnderstandingConfig {
+  model: string;
+  provider: string;
+}
+
 export interface ServerModelProviderConfig {
   enabled?: boolean;
   enabledModels?: string[];
@@ -57,23 +62,29 @@ export interface GlobalServerConfig {
   defaultAgent?: PartialDeep<UserDefaultAgent>;
   disableEmailPassword?: boolean;
   enableBusinessFeatures?: boolean;
+  enableComposio?: boolean;
   /**
    * @deprecated
    */
   enabledOAuthSSO?: boolean;
   enableEmailVerification?: boolean;
-  enableKlavis?: boolean;
+  /**
+   * Whether Gateway mode is available for app-level agent execution.
+   */
+  enableGatewayMode?: boolean;
   enableLobehubSkill?: boolean;
   enableMagicLink?: boolean;
   enableMarketTrustedClient?: boolean;
   enableUploadFileToServer?: boolean;
+  enableVisualUnderstanding?: boolean;
   image?: PartialDeep<UserImageConfig>;
   memory?: GlobalMemoryConfig;
   oAuthSSOProviders?: string[];
-  systemAgent?: PartialDeep<UserSystemAgentConfig>;
+  systemAgent?: PartialDeep<UserServiceModelConfig>;
   telemetry: {
     langfuse?: boolean;
   };
+  visualUnderstanding?: VisualUnderstandingConfig;
 }
 
 export interface GlobalBillboardItemLocaleFields {
@@ -86,7 +97,7 @@ export interface GlobalBillboardItem {
   cover?: string | null;
   description: string;
   /**
-   * 按 locale 覆盖的文案。缺失 locale 或 locale 内某字段缺失时回退到默认字段。
+   * Override copy per locale. Falls back to the default fields when the locale or a field within it is missing.
    */
   i18n?: Record<string, GlobalBillboardItemLocaleFields>;
   id: number;
@@ -102,7 +113,7 @@ export interface GlobalBillboardLocaleFields {
 export interface GlobalBillboard {
   endAt: string;
   /**
-   * 按 locale 覆盖 billboard 级别字段（当前仅 title）。缺失时回退到默认 title。
+   * Override billboard-level fields per locale (currently only title). Falls back to the default title when missing.
    */
   i18n?: Record<string, GlobalBillboardLocaleFields>;
   id: number;

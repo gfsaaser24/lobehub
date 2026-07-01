@@ -16,9 +16,8 @@ const mockDetail: TaskDetailData = {
   identifier: 'T-1',
   instruction: 'Do something',
   name: 'Test Task',
-  parent: { identifier: 'T-0', name: 'Parent' },
+  parent: { agentId: 'agt_parent', identifier: 'T-0', name: 'Parent' },
   priority: 2,
-  review: { enabled: false },
   status: 'running',
   subtasks: [{ identifier: 'T-1-1', name: 'Sub', status: 'backlog' }],
   topicCount: 3,
@@ -115,6 +114,7 @@ describe('taskDetailSelectors', () => {
 
     it('should return activeTaskParent', () => {
       expect(taskDetailSelectors.activeTaskParent(state)?.identifier).toBe('T-0');
+      expect(taskDetailSelectors.activeTaskParent(state)?.agentId).toBe('agt_parent');
     });
 
     it('should return activeTaskTopicCount', () => {

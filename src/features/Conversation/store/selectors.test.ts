@@ -7,13 +7,18 @@ import { conversationSelectors } from './selectors';
 // Helper to create a mock state
 const createMockState = (overrides: Partial<State> = {}): State => ({
   // Input state
+  chatInputOverlayHeight: 0,
   editor: null,
   inputMessage: '',
 
   // MessageState
+  heteroOverloadRetryAttempts: {},
+  heteroOverloadWaitOpIds: {},
   messageEditingIds: [],
   messageLoadingIds: [],
   pendingArgsUpdates: new Map(),
+  selectedMessageIds: [],
+  selectionMode: false,
 
   // VirtuaList state
   activeIndex: null,

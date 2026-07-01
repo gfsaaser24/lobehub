@@ -1,23 +1,15 @@
 import type { TaskAutomationMode } from '@lobechat/types';
-import {
-  ActionIcon,
-  Avatar,
-  Flexbox,
-  Icon,
-  InputNumber,
-  Popover,
-  Segmented,
-  Select,
-  Text,
-} from '@lobehub/ui';
+import { ActionIcon, Avatar, Button, Flexbox, Icon, InputNumber, Popover, Text } from '@lobehub/ui';
+import { Select, Tabs } from '@lobehub/ui/base-ui';
 import { Switch } from 'antd';
 import { createStaticStyles, cssVar } from 'antd-style';
 import dayjs from 'dayjs';
-import { CalendarDays, Clock, RefreshCw, TimerIcon, Zap } from 'lucide-react';
+import { CalendarClockIcon, CalendarDays, Clock, RefreshCw, TimerIcon, Zap } from 'lucide-react';
 import type { ReactNode } from 'react';
 import { memo, useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { usePermission } from '@/hooks/usePermission';
 import { useTaskStore } from '@/store/task';
 import { taskDetailSelectors } from '@/store/task/selectors';
 
@@ -54,10 +46,11 @@ const styles = createStaticStyles(({ css, cssVar }) => ({
 
 interface IntervalTabProps {
   currentInterval: number;
+  disabled?: boolean;
   taskId?: string;
 }
 
-const IntervalTab = memo<IntervalTabProps>(({ currentInterval, taskId }) => {
+const IntervalTab = memo<IntervalTabProps>(({ currentInterval, disabled, taskId }) => {
   const { t } = useTranslation('chat');
   const updatePeriodicInterval = useTaskStore((s) => s.updatePeriodicInterval);
 
@@ -97,23 +90,25 @@ const IntervalTab = memo<IntervalTabProps>(({ currentInterval, taskId }) => {
         normalized = val;
       }
       setLocalValue(normalized);
+      if (disabled) return;
       if (!taskId) return;
       const seconds = toSeconds(normalized ?? null, localUnit);
       updatePeriodicInterval(taskId, seconds);
     },
-    [taskId, localUnit, updatePeriodicInterval],
+    [disabled, taskId, localUnit, updatePeriodicInterval],
   );
 
   const handleUnitChange = useCallback(
     (u: IntervalUnit) => {
       setLocalUnit(u);
+      if (disabled) return;
       if (!taskId || !localValue) return;
       const clamped = u === 'minutes' ? Math.max(MIN_MINUTES, localValue) : localValue;
       if (clamped !== localValue) setLocalValue(clamped);
       const seconds = toSeconds(clamped, u);
       updatePeriodicInterval(taskId, seconds);
     },
-    [taskId, localValue, updatePeriodicInterval],
+    [disabled, taskId, localValue, updatePeriodicInterval],
   );
 
   return (
@@ -122,6 +117,7 @@ const IntervalTab = memo<IntervalTabProps>(({ currentInterval, taskId }) => {
       <Flexbox horizontal align="center" gap={8}>
         <Text type="secondary">{t('taskSchedule.every')}</Text>
         <InputNumber
+          disabled={disabled}
           min={localUnit === 'minutes' ? MIN_MINUTES : 1}
           placeholder={localUnit === 'minutes' ? String(MIN_MINUTES) : '1'}
           style={{ width: 100 }}
@@ -130,6 +126,7 @@ const IntervalTab = memo<IntervalTabProps>(({ currentInterval, taskId }) => {
           onChange={handleValueChange}
         />
         <Select
+          disabled={disabled}
           style={{ flex: 1 }}
           value={localUnit}
           variant="filled"
@@ -146,10 +143,11 @@ const IntervalTab = memo<IntervalTabProps>(({ currentInterval, taskId }) => {
 });
 
 interface SchedulerTabProps {
+  disabled?: boolean;
   taskId?: string;
 }
 
-const SchedulerTab = memo<SchedulerTabProps>(({ taskId }) => {
+const SchedulerTab = memo<SchedulerTabProps>(({ disabled, taskId }) => {
   const updateSchedule = useTaskStore((s) => s.updateSchedule);
   const pattern = useTaskStore(taskDetailSelectors.activeTaskSchedulePattern);
   const timezone = useTaskStore(taskDetailSelectors.activeTaskScheduleTimezone);
@@ -157,14 +155,16 @@ const SchedulerTab = memo<SchedulerTabProps>(({ taskId }) => {
 
   const handleChange = useCallback(
     (change: SchedulerFormChange) => {
+      if (disabled) return;
       if (!taskId) return;
       updateSchedule(taskId, change);
     },
-    [taskId, updateSchedule],
+    [disabled, taskId, updateSchedule],
   );
 
   return (
     <SchedulerForm
+      key={taskId}
       maxExecutions={maxExecutions}
       pattern={pattern}
       timezone={timezone}
@@ -185,10 +185,13 @@ const TaskScheduleConfig = memo(function TaskScheduleConfig({
   taskId,
 }: TaskScheduleConfigProps) {
   const { t, i18n } = useTranslation('chat');
+  const { allowed: canEditTask, reason } = usePermission('create_content');
   const activeTaskId = useTaskStore(taskDetailSelectors.activeTaskId);
   const activeTaskInterval = useTaskStore(taskDetailSelectors.activeTaskPeriodicInterval);
   const automationMode = useTaskStore(taskDetailSelectors.activeTaskAutomationMode);
   const setAutomationMode = useTaskStore((s) => s.setAutomationMode);
+  const updateTaskStatus = useTaskStore((s) => s.updateTaskStatus);
+  const status = useTaskStore(taskDetailSelectors.activeTaskStatus);
   const detail = useTaskStore(taskDetailSelectors.activeTaskDetail);
   const schedulePattern = useTaskStore(taskDetailSelectors.activeTaskSchedulePattern);
   const scheduleTimezone = useTaskStore(taskDetailSelectors.activeTaskScheduleTimezone);
@@ -197,6 +200,15 @@ const TaskScheduleConfig = memo(function TaskScheduleConfig({
   const finalCurrentInterval = currentInterval ?? activeTaskInterval;
 
   const enabled = !!automationMode;
+  const [isStartingSchedule, setIsStartingSchedule] = useState(false);
+  // Heartbeat tasks are re-armed only by maybeRearmHeartbeat after a topic
+  // completes; there is no dispatcher that picks up `scheduled` heartbeat tasks,
+  // so flipping one to `scheduled` from here would leave it dormant.
+  const canStartSchedule =
+    automationMode === 'schedule' &&
+    !!finalTaskId &&
+    status !== 'scheduled' &&
+    status !== 'running';
 
   const summary = useMemo<{ primary: string; secondary?: string } | null>(() => {
     if (automationMode === 'heartbeat' && finalCurrentInterval > 0) {
@@ -250,21 +262,34 @@ const TaskScheduleConfig = memo(function TaskScheduleConfig({
 
   const handleEnableChange = useCallback(
     (checked: boolean) => {
+      if (!canEditTask) return;
       if (!finalTaskId) return;
       // Schedule (cron) is the more common, predictable choice; users who want
       // a fixed interval can switch to the heartbeat tab from there.
       setAutomationMode(finalTaskId, checked ? 'schedule' : null);
     },
-    [finalTaskId, setAutomationMode],
+    [canEditTask, finalTaskId, setAutomationMode],
   );
 
   const handleModeChange = useCallback(
-    (value: string | number) => {
+    (value: string) => {
+      if (!canEditTask) return;
       if (!finalTaskId) return;
       setAutomationMode(finalTaskId, value as TaskAutomationMode);
     },
-    [finalTaskId, setAutomationMode],
+    [canEditTask, finalTaskId, setAutomationMode],
   );
+
+  const handleStartScheduling = useCallback(async () => {
+    if (!canEditTask) return;
+    if (!finalTaskId) return;
+    setIsStartingSchedule(true);
+    try {
+      await updateTaskStatus(finalTaskId, 'scheduled');
+    } finally {
+      setIsStartingSchedule(false);
+    }
+  }, [canEditTask, finalTaskId, updateTaskStatus]);
 
   const content = (
     <Flexbox gap={16} style={{ padding: 4, width: 440 }} onClick={(e) => e.stopPropagation()}>
@@ -286,7 +311,7 @@ const TaskScheduleConfig = memo(function TaskScheduleConfig({
             </Text>
           )}
         </Flexbox>
-        <Switch checked={enabled} onChange={handleEnableChange} />
+        <Switch checked={enabled} disabled={!canEditTask} onChange={handleEnableChange} />
       </Flexbox>
 
       {enabled && nextRunText && (
@@ -301,46 +326,78 @@ const TaskScheduleConfig = memo(function TaskScheduleConfig({
 
       {enabled && (
         <>
-          <Segmented
-            block
-            value={automationMode ?? 'heartbeat'}
-            options={[
+          <Tabs
+            activeKey={automationMode ?? 'heartbeat'}
+            items={[
               {
+                disabled: !canEditTask,
+                key: 'schedule',
                 label: (
                   <Flexbox horizontal align="center" gap={6} justify="center">
                     <Icon icon={CalendarDays} size={14} />
                     <span>{t('taskSchedule.schedulerTab')}</span>
                   </Flexbox>
                 ),
-                value: 'schedule',
               },
               {
+                disabled: !canEditTask,
+                key: 'heartbeat',
                 label: (
                   <Flexbox horizontal align="center" gap={6} justify="center">
                     <Icon icon={RefreshCw} size={14} />
                     <span>{t('taskSchedule.intervalTab')}</span>
                   </Flexbox>
                 ),
-                value: 'heartbeat',
               },
             ]}
+            styles={{
+              list: { display: 'flex', width: '100%' },
+              tab: { flex: 1 },
+            }}
             onChange={handleModeChange}
           />
           {automationMode === 'heartbeat' && (
-            <IntervalTab currentInterval={finalCurrentInterval} taskId={finalTaskId} />
+            <IntervalTab
+              currentInterval={finalCurrentInterval}
+              disabled={!canEditTask}
+              taskId={finalTaskId}
+            />
           )}
-          {automationMode === 'schedule' && <SchedulerTab taskId={finalTaskId} />}
+          {automationMode === 'schedule' && (
+            <SchedulerTab disabled={!canEditTask} taskId={finalTaskId} />
+          )}
+          {canStartSchedule && (
+            <Button
+              block
+              disabled={!canEditTask}
+              icon={CalendarClockIcon}
+              loading={isStartingSchedule}
+              type="primary"
+              onClick={handleStartScheduling}
+            >
+              {t('taskSchedule.startScheduling')}
+            </Button>
+          )}
         </>
       )}
     </Flexbox>
   );
 
   return (
-    <Popover className={styles.popover} content={content} placement="bottomRight" trigger="click">
+    <Popover
+      className={styles.popover}
+      content={content}
+      disabled={!canEditTask}
+      placement="bottomRight"
+      trigger="click"
+    >
       {children ? (
-        <div onClick={(e) => e.stopPropagation()}>{children}</div>
+        <div title={canEditTask ? undefined : reason} onClick={(e) => e.stopPropagation()}>
+          {children}
+        </div>
       ) : (
         <ActionIcon
+          disabled={!canEditTask}
           icon={TimerIcon}
           size="small"
           title={t('taskSchedule.title')}

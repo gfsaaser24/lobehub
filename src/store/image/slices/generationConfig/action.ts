@@ -82,6 +82,23 @@ function preserveImageInputParams(
   return normalizeImageInputOnSchemaSwitch(previousParameters, nextSchema, result);
 }
 
+function preserveReusableSettings(
+  settings: Partial<RuntimeImageGenParams>,
+  nextDefaultValues: RuntimeImageGenParams,
+  nextSchema: ModelParamsSchema,
+) {
+  const reusableSettings = settings as RuntimeImageGenParams;
+  const supportedParamKeys = Object.keys(nextSchema) as RuntimeImageGenParamsKeys[];
+  const result = preserveSupportedParams(
+    reusableSettings,
+    nextDefaultValues,
+    nextSchema,
+    supportedParamKeys,
+  );
+
+  return normalizeImageInputOnSchemaSwitch(reusableSettings, nextSchema, result);
+}
+
 type Setter = StoreSetter<ImageStore>;
 export const createGenerationConfigSlice = (set: Setter, get: () => ImageStore, _api?: unknown) =>
   new GenerationConfigActionImpl(set, get, _api);
@@ -307,17 +324,37 @@ export class GenerationConfigActionImpl {
     this.#set(() => ({ imageNum }), false, `setImageNum/${imageNum}`);
   };
 
+  addUploadingImagePreviews = (urls: string[]): void => {
+    this.#set(
+      (state) => ({ uploadingImagePreviews: [...state.uploadingImagePreviews, ...urls] }),
+      false,
+      'addUploadingImagePreviews',
+    );
+  };
+
+  removeUploadingImagePreviews = (urls: string[]): void => {
+    this.#set(
+      (state) => ({
+        uploadingImagePreviews: state.uploadingImagePreviews.filter((url) => !urls.includes(url)),
+      }),
+      false,
+      'removeUploadingImagePreviews',
+    );
+  };
+
   reuseSettings = (
     model: string,
     provider: string,
     settings: Partial<RuntimeImageGenParams>,
   ): void => {
     const { defaultValues, parametersSchema } = getModelAndDefaults(model, provider);
+    const parameters = preserveReusableSettings(settings, defaultValues, parametersSchema);
+
     this.#set(
       () => ({
         model,
         provider,
-        parameters: { ...defaultValues, ...settings },
+        parameters,
         parametersSchema,
       }),
       false,

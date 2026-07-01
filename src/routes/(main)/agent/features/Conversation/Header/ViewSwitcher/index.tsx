@@ -1,17 +1,18 @@
 'use client';
 
-import { Flexbox, Segmented } from '@lobehub/ui';
+import { AGENT_CHAT_TOPIC_PAGE_URL, AGENT_CHAT_TOPIC_URL } from '@lobechat/const';
+import { Flexbox } from '@lobehub/ui';
+import { Tabs } from '@lobehub/ui/base-ui';
 import { createStaticStyles } from 'antd-style';
 import { FileText, MessageSquareText } from 'lucide-react';
 import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useParams } from 'react-router';
 
-import { SESSION_CHAT_TOPIC_PAGE_URL, SESSION_CHAT_TOPIC_URL } from '@/const/url';
+import { useWorkspaceAwareNavigate } from '@/features/Workspace/useWorkspaceAwareNavigate';
 import { useAgentStore } from '@/store/agent';
 import { agentSelectors } from '@/store/agent/selectors';
 import { useChatStore } from '@/store/chat';
-import { featureFlagsSelectors, useServerConfigStore } from '@/store/serverConfig';
 
 type ViewTab = 'chat' | 'page' | 'task';
 
@@ -20,18 +21,6 @@ const styles = createStaticStyles(({ css }) => ({
     justify-content: center;
     width: 100%;
     min-width: 0;
-  `,
-  switcher: css`
-    .ant-segmented-item-label {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-
-    .ant-segmented-item,
-    .ant-segmented-thumb {
-      border-radius: 999px;
-    }
   `,
   icon: css`
     display: none;
@@ -53,11 +42,10 @@ const styles = createStaticStyles(({ css }) => ({
 
 const ViewSwitcher = memo(() => {
   const { t } = useTranslation('chat');
-  const navigate = useNavigate();
+  const navigate = useWorkspaceAwareNavigate();
   const location = useLocation();
   const params = useParams<{ aid?: string; topicId?: string }>();
   const activeTopicId = useChatStore((s) => s.activeTopicId);
-  const enableAgentTask = useServerConfigStore((s) => featureFlagsSelectors(s).enableAgentTask);
   const isHeterogeneousAgent = useAgentStore(agentSelectors.isCurrentAgentHeterogeneous);
 
   const aid = params.aid;
@@ -65,13 +53,14 @@ const ViewSwitcher = memo(() => {
 
   const currentTab = useMemo((): ViewTab => {
     if (!aid || !topicId) return 'chat';
-    if (location.pathname.startsWith(SESSION_CHAT_TOPIC_PAGE_URL(aid, topicId))) return 'page';
+    if (location.pathname.startsWith(AGENT_CHAT_TOPIC_PAGE_URL(aid, topicId))) return 'page';
     return 'chat';
   }, [aid, topicId, location.pathname]);
 
   const options = useMemo(
     () => [
       {
+        key: 'chat',
         label: (
           <Flexbox
             horizontal
@@ -83,9 +72,9 @@ const ViewSwitcher = memo(() => {
             <span className={styles.text}>{t('viewSwitcher.chat')}</span>
           </Flexbox>
         ),
-        value: 'chat',
       },
       {
+        key: 'page',
         label: (
           <Flexbox
             horizontal
@@ -97,23 +86,21 @@ const ViewSwitcher = memo(() => {
             <span className={styles.text}>{t('viewSwitcher.page')}</span>
           </Flexbox>
         ),
-        value: 'page',
       },
-      // { label: t('viewSwitcher.task'), value: 'task' },
     ],
     [t],
   );
 
-  const handleChange = (value: number | string) => {
+  const handleChange = (key: string) => {
     if (!aid) return;
 
-    switch (String(value) as ViewTab) {
+    switch (key as ViewTab) {
       case 'chat': {
-        if (topicId) navigate(SESSION_CHAT_TOPIC_URL(aid, topicId));
+        if (topicId) navigate(AGENT_CHAT_TOPIC_URL(aid, topicId));
         break;
       }
       case 'page': {
-        if (topicId) navigate(SESSION_CHAT_TOPIC_PAGE_URL(aid, topicId));
+        if (topicId) navigate(AGENT_CHAT_TOPIC_PAGE_URL(aid, topicId));
         break;
       }
       case 'task': {
@@ -123,18 +110,9 @@ const ViewSwitcher = memo(() => {
     }
   };
 
-  if (!topicId || !enableAgentTask || isHeterogeneousAgent) return null;
+  if (!topicId || isHeterogeneousAgent) return null;
 
-  return (
-    <Segmented
-      className={styles.switcher}
-      options={options}
-      shape={'round'}
-      size={'small'}
-      value={currentTab}
-      onChange={handleChange}
-    />
-  );
+  return <Tabs activeKey={currentTab} items={options} size={'small'} onChange={handleChange} />;
 });
 
 ViewSwitcher.displayName = 'ViewSwitcher';

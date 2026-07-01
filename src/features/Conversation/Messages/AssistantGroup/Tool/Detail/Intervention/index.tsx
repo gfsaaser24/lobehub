@@ -1,4 +1,3 @@
-import { UserInteractionIdentifier } from '@lobechat/builtin-tool-user-interaction';
 import { getBuiltinIntervention } from '@lobechat/builtin-tools/interventions';
 import { safeParseJSON } from '@lobechat/utils';
 import { Flexbox } from '@lobehub/ui';
@@ -8,9 +7,15 @@ import { createPortal } from 'react-dom';
 import { useUserStore } from '@/store/user';
 import { toolInterventionSelectors } from '@/store/user/selectors';
 
-import { useConversationStore } from '../../../../../store';
+import { dataSelectors, useConversationStore } from '../../../../../store';
 import Arguments from '../Arguments';
 import ApprovalActions from './ApprovalActions';
+import {
+  isCustomInteractionIdentifier,
+  isHeteroInteractionIdentifier,
+  prepareCustomInteractionSubmit,
+  recordCustomInteractionResolution,
+} from './customInteractionHandlers';
 import Fallback from './Fallback';
 import KeyValueEditor from './KeyValueEditor';
 import SecurityBlacklistWarning from './SecurityBlacklistWarning';
@@ -88,35 +93,82 @@ const Intervention = memo<InterventionProps>(
 
     const parsedArgs = useMemo(() => safeParseJSON(requestArgs || '') ?? {}, [requestArgs]);
 
-    const isCustomInteraction = identifier === UserInteractionIdentifier;
+    const isCustomInteraction = isCustomInteractionIdentifier(identifier, apiName);
 
+    const topicId = useConversationStore((s) => dataSelectors.getDbMessageById(id)(s)?.topicId);
     const submitToolInteraction = useConversationStore((s) => s.submitToolInteraction);
     const skipToolInteraction = useConversationStore((s) => s.skipToolInteraction);
     const cancelToolInteraction = useConversationStore((s) => s.cancelToolInteraction);
+    // Hetero (CC / Codex) interventions ship the answer back through IPC to a
+    // running CLI subprocess instead of starting a fresh `executeClientAgent`
+    // turn. Route through the conversation store so it carries this card's own
+    // `context` (agent/topic) to the chat store — otherwise the optimistic
+    // writes and topic-status flip fall back to the global `activeTopicId` and
+    // land on whichever topic the user is currently viewing.
+    const submitHeteroIntervention = useConversationStore((s) => s.submitHeteroIntervention);
 
     const handleInteractionAction = useCallback(
       async (
         action:
           | { type: 'submit'; payload: Record<string, unknown> }
-          | { type: 'skip'; reason?: string }
-          | { type: 'cancel' },
+          | { type: 'skip'; payload?: Record<string, unknown>; reason?: string }
+          | { type: 'cancel'; payload?: Record<string, unknown> },
       ) => {
+        if (isHeteroInteractionIdentifier(identifier)) {
+          await submitHeteroIntervention(id, action.type, action.payload);
+          return;
+        }
         switch (action.type) {
           case 'submit': {
-            await submitToolInteraction(id, action.payload);
+            const { payload, options } = await prepareCustomInteractionSubmit(
+              identifier,
+              action.payload,
+              {
+                apiName,
+                requestArgs: parsedArgs,
+                topicId,
+              },
+            );
+            await submitToolInteraction(id, payload, options);
             break;
           }
           case 'skip': {
+            await recordCustomInteractionResolution(
+              identifier,
+              'skipped',
+              action.payload,
+              {
+                apiName,
+                requestArgs: parsedArgs,
+                topicId,
+              },
+              action.reason,
+            );
             await skipToolInteraction(id, action.reason);
             break;
           }
           case 'cancel': {
+            await recordCustomInteractionResolution(identifier, 'cancelled', action.payload, {
+              apiName,
+              requestArgs: parsedArgs,
+              topicId,
+            });
             await cancelToolInteraction(id);
             break;
           }
         }
       },
-      [id, submitToolInteraction, skipToolInteraction, cancelToolInteraction],
+      [
+        apiName,
+        cancelToolInteraction,
+        id,
+        identifier,
+        parsedArgs,
+        skipToolInteraction,
+        submitHeteroIntervention,
+        submitToolInteraction,
+        topicId,
+      ],
     );
 
     const BuiltinToolInterventionRender = getBuiltinIntervention(identifier, apiName);
@@ -137,6 +189,7 @@ const Intervention = memo<InterventionProps>(
         return (
           <Flexbox gap={12}>
             <BuiltinToolInterventionRender
+              actionsPortalTarget={actionsPortalTarget}
               apiName={apiName}
               args={parsedArgs}
               identifier={identifier}

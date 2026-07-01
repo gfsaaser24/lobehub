@@ -1,6 +1,7 @@
 import { TITLE_BAR_HEIGHT } from '@lobechat/desktop-bridge';
 import { exportFile } from '@lobechat/utils/client';
-import { Block, Button, Flexbox, Highlighter, Segmented } from '@lobehub/ui';
+import { Block, Button, Flexbox, Highlighter, HtmlPreview } from '@lobehub/ui';
+import { Tabs } from '@lobehub/ui/base-ui';
 import { Drawer } from 'antd';
 import { createStaticStyles } from 'antd-style';
 import { Code2, Download, Eye } from 'lucide-react';
@@ -13,12 +14,9 @@ const styles = createStaticStyles(({ css }) => ({
   container: css`
     height: 100%;
   `,
-  iframe: css`
-    width: 100%;
-    height: 100%;
-    border: none;
-  `,
 }));
+
+const hideHtmlPreviewActions = () => null;
 
 interface HtmlPreviewDrawerProps {
   content: string;
@@ -54,29 +52,29 @@ const HtmlPreviewDrawer = memo<HtmlPreviewDrawerProps>(({ content, open, onClose
   const Title = (
     <Flexbox horizontal align={'center'} justify={'space-between'} style={{ width: '100%' }}>
       {t('HtmlPreview.title')}
-      <Segmented
-        value={mode}
-        options={[
+      <Tabs
+        activeKey={mode}
+        items={[
           {
+            key: 'preview',
             label: (
               <Flexbox horizontal align={'center'} gap={6}>
                 <Eye size={16} />
                 {t('HtmlPreview.mode.preview')}
               </Flexbox>
             ),
-            value: 'preview',
           },
           {
+            key: 'code',
             label: (
               <Flexbox horizontal align={'center'} gap={6}>
                 <Code2 size={16} />
                 {t('HtmlPreview.mode.code')}
               </Flexbox>
             ),
-            value: 'code',
           },
         ]}
-        onChange={(v) => setMode(v as 'preview' | 'code')}
+        onChange={(key) => setMode(key as 'preview' | 'code')}
       />
       <Button
         color={'default'}
@@ -104,12 +102,17 @@ const HtmlPreviewDrawer = memo<HtmlPreviewDrawerProps>(({ content, open, onClose
     >
       {mode === 'preview' ? (
         <Block className={styles.container}>
-          <iframe
-            className={styles.iframe}
-            sandbox="allow-scripts allow-same-origin"
-            srcDoc={content}
+          <HtmlPreview
+            actionsRender={hideHtmlPreviewActions}
+            copyable={false}
+            downloadable={false}
+            style={{ height: '100%' }}
+            styles={{ iframe: { height: '100%' } }}
             title={t('HtmlPreview.iframeTitle')}
-          />
+            variant={'borderless'}
+          >
+            {content}
+          </HtmlPreview>
         </Block>
       ) : (
         <Block className={styles.container}>

@@ -15,11 +15,7 @@ import type {
 import type { MenuProps } from '@lobehub/ui';
 import { useMemo } from 'react';
 
-import {
-  getToolRenderFixture,
-  getToolRenderMeta,
-  type ToolRenderFixture,
-} from './toolRenderFixtures';
+import { getToolRenderFixture, getToolRenderMeta, type ToolRenderFixture } from './fixtures';
 
 export interface ApiEntry {
   apiName: string;
@@ -45,6 +41,18 @@ export interface DevtoolsEntries {
   menuItems: MenuProps['items'];
   toolsetMap: Map<string, ToolsetEntry>;
 }
+
+/** Toolsets that still ship renders but are deprecated — hidden from the gallery. */
+const DEPRECATED_TOOLSETS = new Set(['lobe-notebook']);
+
+/**
+ * Legacy `*Local*` aliases (e.g. `grepLocalFiles`, `listLocalFiles`) only stay
+ * registered so historical DB messages keep rendering after the rename — they
+ * have no manifest/fixture, so they show up as empty cards. Current local-system
+ * API names carry no `Local` marker, so hiding by that marker is safe.
+ */
+const isDeprecatedApi = (identifier: string, apiName: string) =>
+  identifier === 'lobe-local-system' && apiName.includes('Local');
 
 export const toToolsetPath = (identifier: string) => `/devtools/${encodeURIComponent(identifier)}`;
 
@@ -110,6 +118,9 @@ export const useDevtoolsEntries = (): DevtoolsEntries =>
       render,
       streaming,
     } of byKey.values()) {
+      if (DEPRECATED_TOOLSETS.has(identifier)) continue;
+      if (isDeprecatedApi(identifier, apiName)) continue;
+
       const meta = getToolRenderMeta(identifier, apiName);
       const fixture = getToolRenderFixture(identifier, apiName, meta.api);
 

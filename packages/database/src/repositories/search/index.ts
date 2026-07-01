@@ -1,4 +1,4 @@
-import { and, eq, ne, sql } from 'drizzle-orm';
+import { and, eq, inArray, ne, sql } from 'drizzle-orm';
 
 import {
   agents,
@@ -14,6 +14,8 @@ import {
 } from '../../schemas';
 import type { LobeChatDatabase } from '../../type';
 import { sanitizeBm25Query } from '../../utils/bm25';
+import { normalizeInboxAgentMeta, normalizeInboxAgentTitle } from '../../utils/inboxAgent';
+import { buildWorkspaceWhere } from '../../utils/workspace';
 
 export type SearchResultType =
   | 'page'
@@ -73,6 +75,7 @@ export interface TopicSearchResult extends BaseSearchResult {
   } | null;
   agentId: string | null;
   favorite: boolean | null;
+  groupId: string | null;
   sessionId: string | null;
   type: 'topic';
 }
@@ -95,6 +98,7 @@ export interface FolderSearchResult extends BaseSearchResult {
 export interface MessageSearchResult extends BaseSearchResult {
   agentId: string | null;
   content: string;
+  groupId: string | null;
   model: string | null;
   role: string;
   topicId: string | null;
@@ -133,6 +137,25 @@ export interface KnowledgeBaseSearchResult extends BaseSearchResult {
   type: 'knowledgeBase';
 }
 
+/**
+ * BM25 hit for KB-scoped documents used by chunkRouter.semanticSearchForChat.
+ * Covers both inline `custom/document` pages and file-backed documents
+ * (e.g. parsed PDFs) joined through `knowledge_base_files`.
+ *
+ * `fileId` is present when the hit comes from a parsed-file document, letting
+ * the agent fetch the original via readKnowledge with either docs_* or file_*.
+ * `relevance` is normalized to [1, 3] (lower = better, matches BaseSearchResult semantics).
+ */
+export interface KnowledgeBaseDocumentHit {
+  documentId: string;
+  fileId?: string;
+  knowledgeBaseId: string;
+  relevance: number;
+  snippet: string;
+  title: string;
+  updatedAt: Date;
+}
+
 export interface AssistantSearchResult extends BaseSearchResult {
   author: string;
   avatar?: string | null;
@@ -167,15 +190,29 @@ export interface SearchOptions {
 }
 
 /**
+ * Topics and messages are ordered by recency rather than BM25 score, so we fetch
+ * a larger candidate pool first (most relevant matches), then keep the most recent
+ * ones. This prevents newly created/updated items from being buried under older
+ * high-scoring matches that would otherwise fill the small per-type limit.
+ */
+const RECENCY_CANDIDATE_MULTIPLIER = 4;
+
+/**
  * Search Repository - provides unified search across Agents, Topics, and Files
  */
 export class SearchRepo {
   private userId: string;
   private db: LobeChatDatabase;
+  private workspaceId?: string;
 
-  constructor(db: LobeChatDatabase, userId: string) {
+  constructor(db: LobeChatDatabase, userId: string, workspaceId?: string) {
     this.userId = userId;
     this.db = db;
+    this.workspaceId = workspaceId;
+  }
+
+  private get scope() {
+    return { userId: this.userId, workspaceId: this.workspaceId };
   }
 
   /**
@@ -225,10 +262,11 @@ export class SearchRepo {
 
     const results = await Promise.all(searchPromises);
 
-    // Flatten and sort by relevance ASC, then by updatedAt DESC
-    return results
-      .flat()
-      .sort((a, b) => a.relevance - b.relevance || b.updatedAt.getTime() - a.updatedAt.getTime());
+    // Each search method already returns its results in the intended display order
+    // (topics/messages by recency, other types by BM25 score). The command palette
+    // groups results by type, so we only need to preserve each type's internal order
+    // here rather than re-sorting the merged list by relevance.
+    return results.flat();
   }
 
   /**
@@ -376,26 +414,33 @@ export class SearchRepo {
       .from(agents)
       .where(
         and(
-          eq(agents.userId, this.userId),
+          buildWorkspaceWhere(this.scope, agents),
           sql`(${agents.title} @@@ ${bm25Query} OR ${agents.description} @@@ ${bm25Query} OR ${agents.slug} @@@ ${bm25Query} OR ${agents.tags} @@@ ${bm25Query} OR ${agents.systemRole} @@@ ${bm25Query})`,
         ),
       )
       .orderBy(sql`paradedb.score(${agents.id}) DESC`)
       .limit(limit);
 
-    return this.mapScoresToRelevance(rows).map((row) => ({
-      avatar: row.avatar,
-      backgroundColor: row.backgroundColor,
-      createdAt: row.createdAt,
-      description: row.description,
-      id: row.id,
-      relevance: row.relevance,
-      slug: row.slug,
-      tags: (row.tags as string[]) || [],
-      title: row.title || '',
-      type: 'agent' as const,
-      updatedAt: row.updatedAt,
-    }));
+    return this.mapScoresToRelevance(rows).map((row) => {
+      const meta = normalizeInboxAgentMeta(
+        { avatar: row.avatar, title: row.title },
+        { slug: row.slug },
+      );
+
+      return {
+        avatar: meta.avatar,
+        backgroundColor: row.backgroundColor,
+        createdAt: row.createdAt,
+        description: row.description,
+        id: row.id,
+        relevance: row.relevance,
+        slug: row.slug,
+        tags: (row.tags as string[]) || [],
+        title: meta.title || '',
+        type: 'agent' as const,
+        updatedAt: row.updatedAt,
+      };
+    });
   }
 
   /**
@@ -419,10 +464,12 @@ export class SearchRepo {
         agentBackgroundColor: agents.backgroundColor,
         agentId: topics.agentId,
         agentMatchedId: agents.id,
+        agentSlug: agents.slug,
         agentTitle: agents.title,
         content: topics.content,
         createdAt: topics.createdAt,
         favorite: topics.favorite,
+        groupId: topics.groupId,
         id: topics.id,
         score: sql<number>`paradedb.score(${topics.id})`,
         sessionId: topics.sessionId,
@@ -430,36 +477,45 @@ export class SearchRepo {
         updatedAt: topics.updatedAt,
       })
       .from(topics)
-      .leftJoin(agents, and(eq(topics.agentId, agents.id), eq(agents.userId, this.userId)))
+      .leftJoin(agents, and(eq(topics.agentId, agents.id), buildWorkspaceWhere(this.scope, agents)))
       .where(
         and(
-          eq(topics.userId, this.userId),
+          buildWorkspaceWhere(this.scope, topics),
           agentId ? eq(topics.agentId, agentId) : undefined,
           sql`(${topics.title} @@@ ${bm25Query} OR ${topics.content} @@@ ${bm25Query} OR ${topics.description} @@@ ${bm25Query})`,
         ),
       )
       .orderBy(sql`paradedb.score(${topics.id}) DESC`)
-      .limit(limit);
+      .limit(limit * RECENCY_CANDIDATE_MULTIPLIER);
 
-    return this.mapScoresToRelevance(rows).map((row) => ({
-      agent: row.agentMatchedId
-        ? {
-            avatar: row.agentAvatar,
-            backgroundColor: row.agentBackgroundColor,
-            title: row.agentTitle,
-          }
-        : null,
-      agentId: row.agentId,
-      createdAt: row.createdAt,
-      description: this.truncate(row.content),
-      favorite: row.favorite,
-      id: row.id,
-      relevance: row.relevance,
-      sessionId: row.sessionId,
-      title: row.title || '',
-      type: 'topic' as const,
-      updatedAt: row.updatedAt,
-    }));
+    return this.mapScoresToRelevance(rows)
+      .map((row) => ({
+        agent: row.agentMatchedId
+          ? {
+              avatar: normalizeInboxAgentMeta(
+                { avatar: row.agentAvatar, title: row.agentTitle },
+                { slug: row.agentSlug },
+              ).avatar,
+              backgroundColor: row.agentBackgroundColor,
+              title: normalizeInboxAgentTitle(row.agentTitle, {
+                slug: row.agentSlug,
+              }),
+            }
+          : null,
+        agentId: row.agentId,
+        createdAt: row.createdAt,
+        description: this.truncate(row.content),
+        favorite: row.favorite,
+        groupId: row.groupId,
+        id: row.id,
+        relevance: row.relevance,
+        sessionId: row.sessionId,
+        title: row.title || '',
+        type: 'topic' as const,
+        updatedAt: row.updatedAt,
+      }))
+      .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())
+      .slice(0, limit);
   }
 
   /**
@@ -475,9 +531,11 @@ export class SearchRepo {
     const rows = await this.db
       .select({
         agentId: messages.agentId,
+        agentSlug: agents.slug,
         agentTitle: agents.title,
         content: messages.content,
         createdAt: messages.createdAt,
+        groupId: messages.groupId,
         id: messages.id,
         model: messages.model,
         role: messages.role,
@@ -489,29 +547,36 @@ export class SearchRepo {
       .leftJoin(agents, eq(messages.agentId, agents.id))
       .where(
         and(
-          eq(messages.userId, this.userId),
+          buildWorkspaceWhere(this.scope, messages),
           ne(messages.role, 'tool'),
           agentId ? eq(messages.agentId, agentId) : undefined,
           sql`${messages.content} @@@ ${bm25Query}`,
         ),
       )
       .orderBy(sql`paradedb.score(${messages.id}) DESC`)
-      .limit(limit);
+      .limit(limit * RECENCY_CANDIDATE_MULTIPLIER);
 
-    return this.mapScoresToRelevance(rows).map((row) => ({
-      agentId: row.agentId,
-      content: row.content || '',
-      createdAt: row.createdAt,
-      description: row.agentTitle || 'General Chat',
-      id: row.id,
-      model: row.model,
-      relevance: row.relevance,
-      role: row.role,
-      title: this.truncate(row.content) || '',
-      topicId: row.topicId,
-      type: 'message' as const,
-      updatedAt: row.updatedAt,
-    }));
+    return this.mapScoresToRelevance(rows)
+      .map((row) => ({
+        agentId: row.agentId,
+        content: row.content || '',
+        createdAt: row.createdAt,
+        description:
+          normalizeInboxAgentTitle(row.agentTitle, {
+            slug: row.agentSlug,
+          }) || 'General Chat',
+        groupId: row.groupId,
+        id: row.id,
+        model: row.model,
+        relevance: row.relevance,
+        role: row.role,
+        title: this.truncate(row.content) || '',
+        topicId: row.topicId,
+        type: 'message' as const,
+        updatedAt: row.updatedAt,
+      }))
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .slice(0, limit);
   }
 
   /**
@@ -540,7 +605,7 @@ export class SearchRepo {
       .leftJoin(knowledgeBaseFiles, eq(files.id, knowledgeBaseFiles.fileId))
       .where(
         and(
-          eq(files.userId, this.userId),
+          buildWorkspaceWhere(this.scope, files),
           ne(files.fileType, 'custom/document'),
           sql`${files.name} @@@ ${bm25Query}`,
         ),
@@ -585,7 +650,7 @@ export class SearchRepo {
       .from(documents)
       .where(
         and(
-          eq(documents.userId, this.userId),
+          buildWorkspaceWhere(this.scope, documents),
           eq(documents.fileType, DOCUMENT_FOLDER_TYPE),
           sql`(${documents.title} @@@ ${bm25Query} OR ${documents.slug} @@@ ${bm25Query} OR ${documents.description} @@@ ${bm25Query})`,
         ),
@@ -627,7 +692,7 @@ export class SearchRepo {
       .from(documents)
       .where(
         and(
-          eq(documents.userId, this.userId),
+          buildWorkspaceWhere(this.scope, documents),
           eq(documents.fileType, 'custom/document'),
           sql`(${documents.title} @@@ ${bm25Query} OR ${documents.slug} @@@ ${bm25Query} OR ${documents.content} @@@ ${bm25Query})`,
         ),
@@ -647,6 +712,107 @@ export class SearchRepo {
         updatedAt: row.updatedAt,
       };
     });
+  }
+
+  /**
+   * KB-scoped BM25 search over documents.
+   *
+   * Covers two routes to the KB scope, executed as two separate ParadeDB
+   * scoring queries that we merge in JS:
+   *   - inline pages: `documents.knowledge_base_id` directly references the KB
+   *   - file-backed docs (e.g. parsed PDFs): joined through `knowledge_base_files`
+   *     via `documents.file_id`
+   *
+   * Two queries instead of an `OR`-ed WHERE clause because `paradedb.score()`
+   * requires a tantivy index scan, and ParadeDB rejects disjunctive shapes
+   * spanning bm25 and non-bm25 predicates ("Unsupported query shape").
+   *
+   * Folder rows (DOCUMENT_FOLDER_TYPE) are excluded — they carry no content.
+   */
+  async searchKnowledgeBaseDocuments(
+    query: string,
+    knowledgeBaseIds: string[],
+    limit: number = 20,
+  ): Promise<KnowledgeBaseDocumentHit[]> {
+    if (!query || query.trim() === '') return [];
+    if (!knowledgeBaseIds || knowledgeBaseIds.length === 0) return [];
+
+    const bm25Query = sanitizeBm25Query(query);
+
+    const matchClause = sql`(${documents.title} @@@ ${bm25Query} OR ${documents.slug} @@@ ${bm25Query} OR ${documents.content} @@@ ${bm25Query})`;
+    const folderClause = ne(documents.fileType, DOCUMENT_FOLDER_TYPE);
+    const userClause = buildWorkspaceWhere(this.scope, documents);
+
+    const inlineRowsPromise = this.db
+      .select({
+        content: documents.content,
+        fileId: documents.fileId,
+        filename: documents.filename,
+        id: documents.id,
+        knowledgeBaseId: documents.knowledgeBaseId,
+        score: sql<number>`paradedb.score(${documents.id})`,
+        title: documents.title,
+        updatedAt: documents.updatedAt,
+      })
+      .from(documents)
+      .where(
+        and(
+          userClause,
+          folderClause,
+          inArray(documents.knowledgeBaseId, knowledgeBaseIds),
+          matchClause,
+        ),
+      )
+      .orderBy(sql`paradedb.score(${documents.id}) DESC`)
+      .limit(limit);
+
+    const fileBackedRowsPromise = this.db
+      .select({
+        content: documents.content,
+        fileId: documents.fileId,
+        filename: documents.filename,
+        id: documents.id,
+        knowledgeBaseId: knowledgeBaseFiles.knowledgeBaseId,
+        score: sql<number>`paradedb.score(${documents.id})`,
+        title: documents.title,
+        updatedAt: documents.updatedAt,
+      })
+      .from(documents)
+      .innerJoin(
+        knowledgeBaseFiles,
+        and(
+          eq(knowledgeBaseFiles.fileId, documents.fileId),
+          buildWorkspaceWhere(this.scope, knowledgeBaseFiles),
+          inArray(knowledgeBaseFiles.knowledgeBaseId, knowledgeBaseIds),
+        ),
+      )
+      .where(and(userClause, folderClause, matchClause))
+      .orderBy(sql`paradedb.score(${documents.id}) DESC`)
+      .limit(limit);
+
+    const [inlineRows, fileBackedRows] = await Promise.all([
+      inlineRowsPromise,
+      fileBackedRowsPromise,
+    ]);
+
+    const byId = new Map<string, (typeof inlineRows)[number]>();
+    for (const row of [...inlineRows, ...fileBackedRows]) {
+      const prev = byId.get(row.id);
+      if (!prev || row.score > prev.score) byId.set(row.id, row);
+    }
+    const merged = Array.from(byId.values())
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+
+    return this.mapScoresToRelevance(merged).map((row) => ({
+      documentId: row.id,
+      fileId: row.fileId ?? undefined,
+      knowledgeBaseId: row.knowledgeBaseId ?? '',
+      relevance: row.relevance,
+      snippet: this.truncate(row.content, 300) ?? '',
+      title: row.title || row.filename || 'Untitled',
+      updatedAt: row.updatedAt,
+    }));
   }
 
   /**
@@ -707,7 +873,7 @@ export class SearchRepo {
       .from(chatGroups)
       .where(
         and(
-          eq(chatGroups.userId, this.userId),
+          buildWorkspaceWhere(this.scope, chatGroups),
           sql`(${chatGroups.title} @@@ ${bm25Query} OR ${chatGroups.description} @@@ ${bm25Query})`,
         ),
       )
@@ -749,7 +915,7 @@ export class SearchRepo {
       .from(knowledgeBases)
       .where(
         and(
-          eq(knowledgeBases.userId, this.userId),
+          buildWorkspaceWhere(this.scope, knowledgeBases),
           sql`(${knowledgeBases.name} @@@ ${bm25Query} OR ${knowledgeBases.description} @@@ ${bm25Query})`,
         ),
       )

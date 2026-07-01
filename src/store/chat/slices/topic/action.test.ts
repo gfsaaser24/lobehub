@@ -8,6 +8,7 @@ import { mutate } from '@/libs/swr';
 import { chatService } from '@/services/chat';
 import { messageService } from '@/services/message';
 import { topicService } from '@/services/topic';
+import { useAgentStore } from '@/store/agent';
 import { PortalViewType } from '@/store/chat/slices/portal/initialState';
 import { messageMapKey } from '@/store/chat/utils/messageMapKey';
 import { topicMapKey } from '@/store/chat/utils/topicMapKey';
@@ -71,11 +72,17 @@ beforeEach(() => {
   useChatStore.setState(
     {
       activeAgentId: undefined,
+      activeGroupId: undefined,
       activeTopicId: undefined,
+      searchTopics: [],
+      topicDataMap: {},
+      topicLoadingIdCounts: {},
+      topicLoadingIds: [],
       // ... initial state
     },
     false,
   );
+  useAgentStore.setState({ agentDocumentsMap: {} });
   useSessionStore.setState(
     {
       activeId: 'inbox',
@@ -171,6 +178,46 @@ describe('topic action', () => {
       );
       expect(topicId).toEqual('new-topic-id');
     });
+
+    it('should release the fire-and-forget summary loading owner when title summary finishes', async () => {
+      const { result } = renderHook(() => useChatStore());
+      const messages = [{ id: 'message1' }, { id: 'message2' }] as UIChatMessage[];
+      let resolveSummary!: () => void;
+      const summaryPromise = new Promise<void>((resolve) => {
+        resolveSummary = resolve;
+      });
+
+      act(() => {
+        useChatStore.setState({
+          activeAgentId: 'session-id',
+          messagesMap: {
+            [messageMapKey({ agentId: 'session-id' })]: messages,
+          },
+          topicLoadingIdCounts: {},
+          topicLoadingIds: [],
+        });
+      });
+
+      vi.spyOn(result.current, 'internal_createTopic').mockResolvedValue('new-topic-id');
+      vi.spyOn(result.current, 'summaryTopicTitle').mockReturnValue(summaryPromise);
+
+      await act(async () => {
+        await result.current.saveToTopic();
+      });
+
+      expect(useChatStore.getState().topicLoadingIds).toEqual(['new-topic-id']);
+      expect(useChatStore.getState().topicLoadingIdCounts).toEqual({ 'new-topic-id': 1 });
+
+      await act(async () => {
+        resolveSummary();
+        await summaryPromise;
+      });
+
+      await waitFor(() => {
+        expect(useChatStore.getState().topicLoadingIds).toEqual([]);
+        expect(useChatStore.getState().topicLoadingIdCounts).toEqual({});
+      });
+    });
   });
   describe('refreshTopic', () => {
     beforeEach(() => {
@@ -209,13 +256,11 @@ describe('topic action', () => {
       const containerKey = `agent_${activeAgentId}`;
 
       // Should match key with correct containerKey
-      expect(
-        matcherFn(['SWR_USE_FETCH_TOPIC', containerKey, { isInbox: false, pageSize: 20 }]),
-      ).toBe(true);
+      expect(matcherFn(['topic:list', containerKey, { isInbox: false, pageSize: 20 }])).toBe(true);
       // Should not match key with different containerKey
-      expect(
-        matcherFn(['SWR_USE_FETCH_TOPIC', 'agent_other-id', { isInbox: false, pageSize: 20 }]),
-      ).toBe(false);
+      expect(matcherFn(['topic:list', 'agent_other-id', { isInbox: false, pageSize: 20 }])).toBe(
+        false,
+      );
       // Should not match non-array keys
       expect(matcherFn('some-string')).toBe(false);
       // Should not match keys with wrong prefix
@@ -476,6 +521,255 @@ describe('topic action', () => {
       expect(
         useChatStore.getState().topicDataMap[topicMapKey({ agentId: sessionId })]?.items,
       ).toEqual(topics);
+    });
+
+    it('should preserve expanded topic list when first page revalidates after deletion', async () => {
+      const agentId = 'expanded-delete-agent';
+      const pageSize = 20;
+      const currentTopics = [
+        ...Array.from({ length: 19 }, (_, index) => ({
+          id: `topic-${index + 1}`,
+          title: `Topic ${index + 1}`,
+        })),
+        ...Array.from({ length: 20 }, (_, index) => ({
+          id: `topic-${index + 21}`,
+          title: `Topic ${index + 21}`,
+        })),
+      ] as ChatTopic[];
+      const refreshedFirstPage = [
+        ...Array.from({ length: 19 }, (_, index) => ({
+          id: `topic-${index + 1}`,
+          title: `Topic ${index + 1}`,
+        })),
+        { id: 'topic-21', title: 'Topic 21' },
+      ];
+
+      act(() => {
+        useChatStore.setState({
+          activeAgentId: agentId,
+          topicDataMap: {
+            [topicMapKey({ agentId })]: {
+              currentPage: 1,
+              excludeTriggers: ['cron', 'eval'],
+              hasMore: true,
+              isInbox: false,
+              items: currentTopics,
+              pageSize,
+              total: 59,
+            },
+          },
+        });
+      });
+
+      (topicService.getTopics as Mock).mockResolvedValue({
+        items: refreshedFirstPage,
+        total: 59,
+      });
+
+      const useFetchTopics = useChatStore.getState().useFetchTopics;
+
+      const swrResponse = renderHook(() =>
+        useFetchTopics(true, { agentId, excludeTriggers: ['cron', 'eval'], pageSize }),
+      );
+
+      await waitFor(() => {
+        expect(swrResponse.result.current.data).toEqual({
+          items: refreshedFirstPage,
+          total: 59,
+        });
+      });
+
+      await waitFor(() => {
+        const topicData = useChatStore.getState().topicDataMap[topicMapKey({ agentId })];
+
+        expect(topicData).toMatchObject({
+          currentPage: 1,
+          hasMore: true,
+          total: 59,
+        });
+        expect(topicData.items).toHaveLength(39);
+        expect(topicData.items.map((topic) => topic.id)).toEqual([
+          ...Array.from({ length: 19 }, (_, index) => `topic-${index + 1}`),
+          ...Array.from({ length: 20 }, (_, index) => `topic-${index + 21}`),
+        ]);
+      });
+    });
+
+    it('should preserve expanded topic list when first page reorders after favorite refresh', async () => {
+      const agentId = 'favorite-agent';
+      const pageSize = 20;
+      const currentTopics = Array.from({ length: 40 }, (_, index) => ({
+        favorite: index === 34,
+        id: `topic-${index + 1}`,
+        title: `Topic ${index + 1}`,
+      })) as ChatTopic[];
+      const refreshedFirstPage = [
+        { favorite: true, id: 'topic-35', title: 'Topic 35' },
+        ...Array.from({ length: 19 }, (_, index) => ({
+          favorite: false,
+          id: `topic-${index + 1}`,
+          title: `Topic ${index + 1}`,
+        })),
+      ];
+
+      act(() => {
+        useChatStore.setState({
+          activeAgentId: agentId,
+          topicDataMap: {
+            [topicMapKey({ agentId })]: {
+              currentPage: 1,
+              excludeTriggers: ['cron', 'eval'],
+              hasMore: true,
+              isInbox: false,
+              items: currentTopics,
+              pageSize,
+              total: 60,
+            },
+          },
+        });
+      });
+
+      (topicService.getTopics as Mock).mockResolvedValue({
+        items: refreshedFirstPage,
+        total: 60,
+      });
+
+      const useFetchTopics = useChatStore.getState().useFetchTopics;
+      const swrResponse = renderHook(() =>
+        useFetchTopics(true, { agentId, excludeTriggers: ['cron', 'eval'], pageSize }),
+      );
+
+      await waitFor(() => {
+        expect(swrResponse.result.current.data).toEqual({
+          items: refreshedFirstPage,
+          total: 60,
+        });
+      });
+
+      await waitFor(() => {
+        const topicData = useChatStore.getState().topicDataMap[topicMapKey({ agentId })];
+
+        expect(topicData).toMatchObject({
+          currentPage: 1,
+          hasMore: true,
+          total: 60,
+        });
+        expect(topicData.items).toHaveLength(40);
+        expect(topicData.items[0].id).toBe('topic-35');
+        expect(topicData.items.some((topic) => topic.id === 'topic-40')).toBe(true);
+      });
+    });
+
+    it('should reset expanded pagination when excludeTriggers changes for the same agent', async () => {
+      const agentId = 'filtered-agent';
+      const pageSize = 20;
+      const currentTopics = Array.from({ length: 40 }, (_, index) => ({
+        id: `topic-${index + 1}`,
+        title: `Topic ${index + 1}`,
+      })) as ChatTopic[];
+      const refreshedTopics = Array.from({ length: 20 }, (_, index) => ({
+        id: `new-topic-${index + 1}`,
+        title: `New Topic ${index + 1}`,
+      }));
+
+      act(() => {
+        useChatStore.setState({
+          activeAgentId: agentId,
+          topicDataMap: {
+            [topicMapKey({ agentId })]: {
+              currentPage: 1,
+              excludeTriggers: ['cron', 'eval'],
+              hasMore: true,
+              isInbox: false,
+              items: currentTopics,
+              pageSize,
+              total: 60,
+            },
+          },
+        });
+      });
+
+      (topicService.getTopics as Mock).mockResolvedValue({
+        items: refreshedTopics,
+        total: 20,
+      });
+
+      const useFetchTopics = useChatStore.getState().useFetchTopics;
+      const swrResponse = renderHook(() =>
+        useFetchTopics(true, { agentId, excludeTriggers: ['cron'], pageSize }),
+      );
+
+      await waitFor(() => {
+        expect(swrResponse.result.current.data).toEqual({ items: refreshedTopics, total: 20 });
+      });
+
+      await waitFor(() => {
+        const topicData = useChatStore.getState().topicDataMap[topicMapKey({ agentId })];
+
+        expect(topicData).toMatchObject({
+          currentPage: 0,
+          excludeTriggers: ['cron'],
+          hasMore: false,
+          total: 20,
+        });
+        expect(topicData.items).toEqual(refreshedTopics);
+      });
+    });
+
+    it('should reset expanded pagination when excludeStatuses changes for the same agent', async () => {
+      const agentId = 'status-filtered-agent';
+      const pageSize = 20;
+      const currentTopics = Array.from({ length: 40 }, (_, index) => ({
+        id: `topic-${index + 1}`,
+        title: `Topic ${index + 1}`,
+      })) as ChatTopic[];
+      const refreshedTopics = Array.from({ length: 20 }, (_, index) => ({
+        id: `active-topic-${index + 1}`,
+        title: `Active Topic ${index + 1}`,
+      }));
+
+      act(() => {
+        useChatStore.setState({
+          activeAgentId: agentId,
+          topicDataMap: {
+            [topicMapKey({ agentId })]: {
+              currentPage: 1,
+              excludeStatuses: ['completed', 'archived'],
+              hasMore: true,
+              isInbox: false,
+              items: currentTopics,
+              pageSize,
+              total: 60,
+            },
+          },
+        });
+      });
+
+      (topicService.getTopics as Mock).mockResolvedValue({
+        items: refreshedTopics,
+        total: 20,
+      });
+
+      const useFetchTopics = useChatStore.getState().useFetchTopics;
+      const swrResponse = renderHook(() =>
+        useFetchTopics(true, { agentId, excludeStatuses: ['completed'], pageSize }),
+      );
+
+      await waitFor(() => {
+        expect(swrResponse.result.current.data).toEqual({ items: refreshedTopics, total: 20 });
+      });
+
+      await waitFor(() => {
+        const topicData = useChatStore.getState().topicDataMap[topicMapKey({ agentId })];
+
+        expect(topicData).toMatchObject({
+          currentPage: 0,
+          excludeStatuses: ['completed'],
+          hasMore: false,
+          total: 20,
+        });
+        expect(topicData.items).toEqual(refreshedTopics);
+      });
     });
   });
   describe('useSearchTopics', () => {
@@ -920,6 +1214,76 @@ describe('topic action', () => {
       expect(topicService.removeTopic).not.toHaveBeenCalled();
       expect(refreshTopicSpy).not.toHaveBeenCalled();
     });
+
+    it('should keep expanded pagination state after removing a topic', async () => {
+      const topicId = 'topic-21';
+      const activeAgentId = 'expanded-agent';
+      const existingTopics = Array.from({ length: 40 }, (_, index) => ({
+        id: `topic-${index + 1}`,
+        title: `Topic ${index + 1}`,
+      })) as ChatTopic[];
+      const { result } = renderHook(() => useChatStore());
+
+      act(() => {
+        useChatStore.setState({
+          activeAgentId,
+          topicDataMap: {
+            [topicMapKey({ agentId: activeAgentId })]: {
+              currentPage: 1,
+              hasMore: true,
+              isInbox: false,
+              items: existingTopics,
+              pageSize: 20,
+              total: 60,
+            },
+          },
+        });
+      });
+
+      vi.spyOn(result.current, 'refreshTopic').mockResolvedValue(undefined);
+
+      await act(async () => {
+        await result.current.removeTopic(topicId);
+      });
+
+      const topicData =
+        useChatStore.getState().topicDataMap[topicMapKey({ agentId: activeAgentId })];
+
+      expect(topicService.removeTopic).toHaveBeenCalledWith(topicId);
+      expect(topicData).toMatchObject({
+        currentPage: 1,
+        hasMore: true,
+        total: 59,
+      });
+      expect(topicData.items).toHaveLength(39);
+      expect(topicData.items.some((topic) => topic.id === topicId)).toBe(false);
+    });
+
+    it('should initialize addTopic total correctly for empty containers', async () => {
+      const activeAgentId = 'empty-agent';
+      const { result } = renderHook(() => useChatStore());
+
+      act(() => {
+        useChatStore.setState({ activeAgentId, topicDataMap: {} });
+      });
+
+      act(() => {
+        result.current.internal_dispatchTopic(
+          {
+            type: 'addTopic',
+            value: { id: 'topic-1', messages: [], sessionId: activeAgentId, title: 'Topic 1' },
+          },
+          'test/addTopic',
+        );
+      });
+
+      const topicData =
+        useChatStore.getState().topicDataMap[topicMapKey({ agentId: activeAgentId })];
+
+      expect(topicData.items).toHaveLength(1);
+      expect(topicData.total).toBe(1);
+      expect(topicData.hasMore).toBe(false);
+    });
   });
   describe('removeUnstarredTopic', () => {
     it('should remove unstarred topics and refresh the topic list', async () => {
@@ -956,6 +1320,52 @@ describe('topic action', () => {
       expect(switchTopicSpy).toHaveBeenCalled();
     });
   });
+  describe('internal_updateTopic', () => {
+    it('should release the loading owner when updating a topic fails', async () => {
+      const { result } = renderHook(() => useChatStore());
+      const agentId = 'agent-1';
+      const topicId = 'topic-1';
+      const key = topicMapKey({ agentId });
+      const topic: ChatTopic = {
+        createdAt: Date.now(),
+        favorite: false,
+        id: topicId,
+        sessionId: agentId,
+        title: 'Topic',
+        updatedAt: Date.now(),
+      };
+
+      act(() => {
+        useChatStore.setState({
+          activeAgentId: agentId,
+          topicDataMap: {
+            [key]: {
+              currentPage: 0,
+              hasMore: false,
+              isExpandingPageSize: false,
+              isLoadingMore: false,
+              items: [topic],
+              pageSize: 20,
+              total: 1,
+            },
+          },
+          topicLoadingIdCounts: {},
+          topicLoadingIds: [],
+        });
+      });
+
+      vi.spyOn(topicService, 'updateTopic').mockRejectedValue(new Error('rename failed'));
+
+      await act(async () => {
+        await expect(
+          result.current.internal_updateTopic(topicId, { title: 'New' }),
+        ).rejects.toThrow('rename failed');
+      });
+
+      expect(useChatStore.getState().topicLoadingIds).not.toContain(topicId);
+      expect(useChatStore.getState().topicLoadingIdCounts[topicId]).toBeUndefined();
+    });
+  });
   describe('updateTopicLoading', () => {
     it('should call update topicLoadingId', async () => {
       const { result } = renderHook(() => useChatStore());
@@ -972,12 +1382,94 @@ describe('topic action', () => {
 
       expect(result.current.topicLoadingIds).toEqual(['loading-id']);
     });
+
+    it('should keep a topic loading until all loading owners finish', () => {
+      const { result } = renderHook(() => useChatStore());
+      act(() => {
+        useChatStore.setState({ topicLoadingIdCounts: {}, topicLoadingIds: [] });
+      });
+
+      act(() => {
+        result.current.internal_updateTopicLoading('topic-1', true);
+        result.current.internal_updateTopicLoading('topic-1', true);
+      });
+
+      expect(result.current.topicLoadingIds).toEqual(['topic-1']);
+      expect(result.current.topicLoadingIdCounts).toEqual({ 'topic-1': 2 });
+
+      act(() => {
+        result.current.internal_updateTopicLoading('topic-1', false);
+      });
+
+      expect(result.current.topicLoadingIds).toEqual(['topic-1']);
+      expect(result.current.topicLoadingIdCounts).toEqual({ 'topic-1': 1 });
+
+      act(() => {
+        result.current.internal_updateTopicLoading('topic-1', false);
+      });
+
+      expect(result.current.topicLoadingIds).toEqual([]);
+      expect(result.current.topicLoadingIdCounts).toEqual({});
+    });
+  });
+  describe('replaceTopicId', () => {
+    it('should migrate a loading optimistic topic to the server topic id', () => {
+      const { result } = renderHook(() => useChatStore());
+      const agentId = 'agent-1';
+      const key = topicMapKey({ agentId });
+      const optimisticTopic: ChatTopic = {
+        createdAt: Date.now(),
+        favorite: false,
+        id: 'tmp_topic_1',
+        sessionId: agentId,
+        title: '666',
+        updatedAt: Date.now(),
+      };
+
+      act(() => {
+        useChatStore.setState({
+          activeAgentId: agentId,
+          topicDataMap: {
+            [key]: {
+              currentPage: 0,
+              hasMore: false,
+              isExpandingPageSize: false,
+              isLoadingMore: false,
+              items: [optimisticTopic],
+              pageSize: 20,
+              total: 1,
+            },
+          },
+          topicLoadingIdCounts: { tmp_topic_1: 2 },
+          topicLoadingIds: ['tmp_topic_1'],
+        });
+      });
+
+      act(() => {
+        result.current.internal_replaceTopicId({
+          agentId,
+          nextId: 'topic-1',
+          previousId: 'tmp_topic_1',
+          value: { sessionId: agentId },
+        });
+      });
+
+      expect(result.current.topicDataMap[key].items).toEqual([
+        expect.objectContaining({
+          id: 'topic-1',
+          sessionId: agentId,
+          title: '666',
+        }),
+      ]);
+      expect(result.current.topicLoadingIds).toEqual(['topic-1']);
+      expect(result.current.topicLoadingIdCounts).toEqual({ 'topic-1': 2 });
+    });
   });
   describe('summaryTopicTitle', () => {
-    it('should auto-summarize the topic title and update it', async () => {
+    it('should show a loading placeholder when auto-summarizing a topic without a title', async () => {
       const topicId = 'topic-1';
       const messages = [{ id: 'message-1', content: 'Hello' }] as UIChatMessage[];
-      const topics = [{ id: 'topic-1', title: 'Test Topic' }] as ChatTopic[];
+      const topics = [{ id: 'topic-1', title: '' }] as ChatTopic[];
       const { result } = renderHook(() => useChatStore());
       await act(async () => {
         useChatStore.setState({
@@ -1018,6 +1510,47 @@ describe('topic action', () => {
       expect(refreshTopicSpy).toHaveBeenCalled();
 
       // TODO: need to test with fetchPresetTaskResult
+    });
+
+    it('should keep an optimistic title visible until the summarized title is ready', async () => {
+      const topicId = 'topic-1';
+      const messages = [{ id: 'message-1', content: 'Hello' }] as UIChatMessage[];
+      const optimisticTitle = '阅读下面的材料，根据要求写作。';
+      const topics = [{ id: topicId, title: optimisticTitle }] as ChatTopic[];
+      const { result } = renderHook(() => useChatStore());
+      await act(async () => {
+        useChatStore.setState({
+          topicDataMap: {
+            [topicMapKey({ agentId: 'test' })]: {
+              items: topics,
+              total: topics.length,
+              currentPage: 0,
+              hasMore: false,
+              pageSize: 20,
+            },
+          },
+          activeAgentId: 'test',
+        });
+      });
+
+      const updateTopicTitleInSummarySpy = vi.spyOn(
+        result.current,
+        'internal_updateTopicTitleInSummary',
+      );
+      const updateTopicSpy = vi.spyOn(result.current, 'internal_updateTopic');
+
+      vi.spyOn(chatService, 'fetchPresetTaskResult').mockImplementation(async (params) => {
+        params?.onMessageHandle?.({ type: 'text', text: 'Partial Title' } as any);
+        await params?.onFinish?.('Summarized Title', { type: 'done' });
+      });
+
+      await act(async () => {
+        await result.current.summaryTopicTitle(topicId, messages);
+      });
+
+      expect(updateTopicTitleInSummarySpy).not.toHaveBeenCalledWith(topicId, LOADING_FLAT);
+      expect(updateTopicTitleInSummarySpy).not.toHaveBeenCalledWith(topicId, 'Partial Title');
+      expect(updateTopicSpy).toHaveBeenCalledWith(topicId, { title: 'Summarized Title' });
     });
   });
   describe('createTopic', () => {

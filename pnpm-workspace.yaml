@@ -3,10 +3,12 @@ packages:
   - .
   - e2e
   - apps/desktop/src/main
+  - apps/server
 
 onlyBuiltDependencies:
-  - '@vercel/speed-insights'
+  - '@google/genai'
   - '@lobehub/editor'
+  - '@vercel/speed-insights'
 
 overrides:
   jose: ^6.1.3

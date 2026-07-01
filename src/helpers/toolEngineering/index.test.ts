@@ -6,6 +6,7 @@ import { createAgentToolsEngine, createToolsEngine, getEnabledTools } from './in
 // Mock the store and helper dependencies
 vi.mock('@/store/tool', () => ({
   getToolStoreState: () => ({
+    connectors: [],
     builtinTools: [
       {
         identifier: 'search',
@@ -59,6 +60,39 @@ vi.mock('@/store/tool', () => ({
         } as unknown as ToolManifest,
         type: 'builtin' as const,
       },
+      {
+        identifier: 'lobe-agent',
+        manifest: {
+          api: [
+            {
+              description: 'Analyze visual media',
+              name: 'analyzeVisualMedia',
+              parameters: {
+                properties: {
+                  question: { type: 'string' },
+                  refs: {
+                    items: { type: 'string' },
+                    type: 'array',
+                  },
+                  urls: {
+                    items: { type: 'string' },
+                    type: 'array',
+                  },
+                },
+                required: ['question'],
+                type: 'object',
+              },
+            },
+          ],
+          identifier: 'lobe-agent',
+          meta: {
+            title: 'Lobe Agent',
+            avatar: 'V',
+          },
+          type: 'builtin',
+        } as unknown as ToolManifest,
+        type: 'builtin' as const,
+      },
     ],
   }),
 }));
@@ -71,16 +105,18 @@ vi.mock('@/store/tool/selectors', () => ({
     getInstalledPluginById: (id: string) => mockGetInstalledPluginById(id),
     installedPluginManifestList: () => mockInstalledPluginManifestList(),
   },
-  klavisStoreSelectors: {
-    klavisAsLobeTools: () => [],
+  composioStoreSelectors: {
+    composioAsLobeTools: () => [],
   },
   lobehubSkillStoreSelectors: {
     lobehubSkillAsLobeTools: () => [],
   },
 }));
 
+let mockIsCanUseFC = true;
+
 vi.mock('../isCanUseFC', () => ({
-  isCanUseFC: () => true,
+  isCanUseFC: () => mockIsCanUseFC,
 }));
 
 let mockCurrentAgentPlugins: string[] = [];
@@ -128,6 +164,7 @@ describe('toolEngineering', () => {
     mockInstalledPluginManifestList = () => [];
     mockUseApplicationBuiltinSearchTool = true;
     mockCurrentAgentPlugins = [];
+    mockIsCanUseFC = true;
   });
 
   describe('createToolsEngine', () => {
@@ -215,8 +252,63 @@ describe('toolEngineering', () => {
         provider: 'openai',
       });
 
-      expect(result.enabledToolIds).toEqual(['search', 'lobe-web-browsing']);
-      expect(result.enabledToolIds).toHaveLength(2);
+      // lobe-agent is always-on (alwaysOnToolIds), so it rides along with user tools.
+      expect(result.enabledToolIds).toEqual(['search', 'lobe-web-browsing', 'lobe-agent']);
+      expect(result.enabledToolIds).toHaveLength(3);
+    });
+
+    it('should enable lobe-agent when it is injected into runtime plugin ids', () => {
+      const toolsEngine = createAgentToolsEngine({ model: 'deepseek-chat', provider: 'deepseek' }, [
+        'lobe-agent',
+      ]);
+
+      const result = toolsEngine.generateToolsDetailed({
+        model: 'deepseek-chat',
+        provider: 'deepseek',
+        toolIds: [],
+      });
+
+      expect(result.enabledToolIds).toContain('lobe-agent');
+    });
+
+    it('should enable lobe-agent by default since it is always-on', () => {
+      const toolsEngine = createAgentToolsEngine({
+        model: 'deepseek-chat',
+        provider: 'deepseek',
+      });
+
+      const result = toolsEngine.generateToolsDetailed({
+        model: 'deepseek-chat',
+        provider: 'deepseek',
+        toolIds: [],
+      });
+
+      expect(result.enabledToolIds).toContain('lobe-agent');
+    });
+
+    it('should use chat-mode defaults when the model does not support function calling', () => {
+      mockIsCanUseFC = false;
+
+      const toolsEngine = createAgentToolsEngine({
+        model: 'gemini-3.1-flash-lite-image',
+        provider: 'lobehub',
+      });
+
+      const result = toolsEngine.generateToolsDetailed({
+        model: 'gemini-3.1-flash-lite-image',
+        provider: 'lobehub',
+        toolIds: [],
+      });
+
+      expect(result.enabledToolIds).toEqual([]);
+      expect(result.filteredTools).not.toContainEqual({
+        id: 'lobe-agent',
+        reason: 'incompatible',
+      });
+      expect(result.filteredTools).toContainEqual({
+        id: 'lobe-web-browsing',
+        reason: 'incompatible',
+      });
     });
   });
 

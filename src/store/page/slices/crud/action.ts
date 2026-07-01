@@ -1,3 +1,4 @@
+import { CUSTOM_DOCUMENT_FILE_TYPE } from '@lobechat/const';
 import { type SWRResponse } from 'swr';
 
 import { useClientDataSWRWithSync } from '@/libs/swr';
@@ -13,7 +14,7 @@ import { type PageStore } from '../../store';
 
 const n = setNamespace('page/crud');
 
-const EDITOR_PAGE_FILE_TYPE = 'custom/document';
+const EDITOR_PAGE_FILE_TYPE = CUSTOM_DOCUMENT_FILE_TYPE;
 
 /**
  * Page update parameters - flattened for easier use
@@ -56,7 +57,7 @@ export class CrudActionImpl {
           typeof newPage.editorData === 'string'
             ? JSON.parse(newPage.editorData)
             : newPage.editorData || null,
-        fileType: 'custom/document',
+        fileType: CUSTOM_DOCUMENT_FILE_TYPE,
         filename: newPage.title || title,
         id: newPage.id,
         metadata: newPage.metadata || {},
@@ -326,11 +327,6 @@ export class CrudActionImpl {
     // Queue background sync to DB
     try {
       await documentService.updateDocument({
-        content: updatedPage.content || '',
-        editorData:
-          typeof updatedPage.editorData === 'string'
-            ? updatedPage.editorData
-            : JSON.stringify(updatedPage.editorData || {}),
         id: pageId,
         metadata: updatedPage.metadata || {},
         parentId: updatedPage.parentId || undefined,
@@ -382,6 +378,8 @@ export class CrudActionImpl {
           totalCharCount: document.content?.length || 0,
           totalLineCount: 0,
           updatedAt: document.updatedAt ? new Date(document.updatedAt) : new Date(),
+          userId: document.userId,
+          workspaceId: document.workspaceId ?? null,
         };
 
         return fullPage;

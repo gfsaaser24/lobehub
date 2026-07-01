@@ -3,6 +3,7 @@ import { Loader2, SquareArrowOutUpRight } from 'lucide-react';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { usePermission } from '@/hooks/usePermission';
 import { useAgentStore } from '@/store/agent';
 import { agentSelectors } from '@/store/agent/selectors';
 import { useToolStore } from '@/store/tool';
@@ -33,6 +34,8 @@ const LobehubSkillServerItem = memo<LobehubSkillServerItemProps>(({ provider, la
   const [isConnecting, setIsConnecting] = useState(false);
   const [isToggling, setIsToggling] = useState(false);
   const [isWaitingAuth, setIsWaitingAuth] = useState(false);
+  const { allowed: canCreate } = usePermission('create_content');
+  const { allowed: canEdit } = usePermission('edit_own_content');
 
   const oauthWindowRef = useRef<Window | null>(null);
   const windowCheckIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -182,7 +185,7 @@ const LobehubSkillServerItem = memo<LobehubSkillServerItemProps>(({ provider, la
             agentSelectors.getAgentConfigById(effectiveAgentId)(useAgentStore.getState())
               ?.plugins || [];
           const isAlreadyEnabled = currentAgentPlugins.includes(newPluginId);
-          if (!isAlreadyEnabled) {
+          if (canEdit && !isAlreadyEnabled) {
             console.info('[LobehubSkill] Auto-enabling plugin:', newPluginId);
             togglePlugin(newPluginId);
           }
@@ -192,16 +195,20 @@ const LobehubSkillServerItem = memo<LobehubSkillServerItemProps>(({ provider, la
 
     window.addEventListener('message', handleMessage);
     return () => window.removeEventListener('message', handleMessage);
-  }, [provider, cleanup, checkStatus, togglePlugin, effectiveAgentId]);
+  }, [canEdit, provider, cleanup, checkStatus, togglePlugin, effectiveAgentId]);
 
   const handleConnect = async () => {
+    if (!canCreate || !canEdit) return;
     // Only block reconnection when already connected
     if (server?.isConnected) return;
 
     setIsConnecting(true);
     try {
       // Use /oauth/callback/success as redirect URI with provider param for auto-enable
-      const redirectUri = `${window.location.origin}/oauth/callback/success?provider=${encodeURIComponent(provider)}`;
+      // Skip redirectUri on desktop (app:// protocol) since the system browser can't navigate to it
+      const redirectUri = window.location.protocol.startsWith('http')
+        ? `${window.location.origin}/oauth/callback/success?provider=${encodeURIComponent(provider)}`
+        : undefined;
       const { authorizeUrl } = await getAuthorizeUrl(provider, { redirectUri });
       openOAuthWindow(authorizeUrl);
     } catch (error) {
@@ -212,7 +219,7 @@ const LobehubSkillServerItem = memo<LobehubSkillServerItemProps>(({ provider, la
   };
 
   const handleToggle = async () => {
-    if (!server) return;
+    if (!canEdit || !server) return;
     setIsToggling(true);
     await togglePlugin(pluginId);
     setIsToggling(false);
@@ -233,9 +240,10 @@ const LobehubSkillServerItem = memo<LobehubSkillServerItemProps>(({ provider, la
           horizontal
           align="center"
           gap={4}
-          style={{ cursor: 'pointer', opacity: 0.65 }}
+          style={{ cursor: canCreate && canEdit ? 'pointer' : 'not-allowed', opacity: 0.65 }}
           onClick={(e) => {
             e.stopPropagation();
+            if (!canCreate || !canEdit) return;
             handleConnect();
           }}
         >
@@ -253,8 +261,10 @@ const LobehubSkillServerItem = memo<LobehubSkillServerItemProps>(({ provider, la
         return (
           <Checkbox
             checked={checked}
+            disabled={!canEdit}
             onClick={(e) => {
               e.stopPropagation();
+              if (!canEdit) return;
               handleToggle();
             }}
           />
@@ -273,11 +283,14 @@ const LobehubSkillServerItem = memo<LobehubSkillServerItemProps>(({ provider, la
             horizontal
             align="center"
             gap={4}
-            style={{ cursor: 'pointer', opacity: 0.65 }}
+            style={{ cursor: canEdit ? 'pointer' : 'not-allowed', opacity: 0.65 }}
             onClick={async (e) => {
               e.stopPropagation();
+              if (!canEdit) return;
               try {
-                const redirectUri = `${window.location.origin}/oauth/callback/success?provider=${encodeURIComponent(provider)}`;
+                const redirectUri = window.location.protocol.startsWith('http')
+                  ? `${window.location.origin}/oauth/callback/success?provider=${encodeURIComponent(provider)}`
+                  : undefined;
                 const { authorizeUrl } = await getAuthorizeUrl(provider, { redirectUri });
                 openOAuthWindow(authorizeUrl);
               } catch (error) {
@@ -296,9 +309,10 @@ const LobehubSkillServerItem = memo<LobehubSkillServerItemProps>(({ provider, la
             horizontal
             align="center"
             gap={4}
-            style={{ cursor: 'pointer', opacity: 0.65 }}
+            style={{ cursor: canCreate && canEdit ? 'pointer' : 'not-allowed', opacity: 0.65 }}
             onClick={(e) => {
               e.stopPropagation();
+              if (!canCreate || !canEdit) return;
               handleConnect();
             }}
           >
@@ -328,7 +342,7 @@ const LobehubSkillServerItem = memo<LobehubSkillServerItemProps>(({ provider, la
       justify={'space-between'}
       onClick={(e) => {
         e.stopPropagation();
-        if (server?.status === LobehubSkillStatus.CONNECTED) {
+        if (canEdit && server?.status === LobehubSkillStatus.CONNECTED) {
           handleToggle();
         }
       }}

@@ -48,12 +48,35 @@ export enum AsyncTaskErrorType {
    */
   TaskTriggerError = 'TaskTriggerError',
   Timeout = 'TaskTimeout',
+  /* ↓ cloud slot | workspace freeze ↓ */
+  /**
+   * Workspace was manually frozen by an admin; spend is blocked until unfrozen.
+   */
+  WorkspaceFrozenByAdmin = 'WorkspaceFrozenByAdmin',
+  /**
+   * Workspace was auto-frozen by risk control after abnormal spend; spend is blocked
+   * until manually unfrozen by an admin.
+   */
+  WorkspaceFrozenByRiskControl = 'WorkspaceFrozenByRiskControl',
+  /* ↑ cloud slot ↑ */
 }
 
 export interface AsyncTaskStructuredErrorItem {
+  /**
+   * Structured error cause when the top-level error wraps a lower-level failure.
+   */
+  cause?: AsyncTaskStructuredErrorItem;
+  /**
+   * Machine-readable error code from lower-level libraries or database drivers.
+   */
+  code?: string;
   layer?: string;
   memoryIndex?: number;
   message: string;
+  /**
+   * Error class name, for example `DrizzleQueryError` or `PostgresError`.
+   */
+  name?: string;
   preview?: string;
   sourceId?: string;
   sourceType?: string;

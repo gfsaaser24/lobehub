@@ -20,6 +20,7 @@ declare global {
   interface Window {
     __DEBUG_PROXY__: boolean | undefined;
     __editor?: IEditor;
+    __LOBE_BOOT_T_HTML__?: number;
     /** Dev-only: Zustand store snapshots via `getState()` keyed by store name */
     __LOBE_STORES?: Record<string, () => unknown>;
     __SERVER_CONFIG__: SPAServerConfig | undefined;
@@ -38,6 +39,12 @@ declare global {
 
   /** Vite define: development mode (NODE_ENV !== 'production') */
   const __DEV__: boolean;
+
+  /** Vite define: running under Vitest */
+  const __TEST__: boolean;
+
+  /** Vite define: enable react-scan diagnostic runtime */
+  const __REACT_SCAN__: boolean;
 
   /** Vite define: current bundle is mobile variant */
   const __MOBILE__: boolean;

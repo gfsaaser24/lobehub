@@ -2,6 +2,7 @@ import { Avatar, Icon } from '@lobehub/ui';
 import { SkillsIcon } from '@lobehub/ui/icons';
 import { Bot, MessageSquareText, Users, Wrench } from 'lucide-react';
 import { useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { useChatStore } from '@/store/chat';
 import { topicSelectors } from '@/store/chat/selectors';
@@ -21,6 +22,7 @@ const MAX_TOPIC_LABEL = 50;
 type MenuOptionWithMetadata = { key: string; metadata?: Record<string, unknown> };
 
 export const useMentionCategories = (): MentionCategory[] => {
+  const { t } = useTranslation('chat');
   const currentAgentId = useAgentId();
   const allAgents = useHomeStore(homeAgentListSelectors.allAgents);
 
@@ -67,7 +69,7 @@ export const useMentionCategories = (): MentionCategory[] => {
           id: 'agent',
           icon: <Icon icon={Bot} size={16} />,
           items,
-          label: 'Agents',
+          label: t('mention.category.agents'),
         });
       }
     }
@@ -86,7 +88,7 @@ export const useMentionCategories = (): MentionCategory[] => {
           id: 'member',
           icon: <Icon icon={Users} size={16} />,
           items,
-          label: 'Members',
+          label: t('mention.category.members'),
         });
       }
     }
@@ -117,7 +119,7 @@ export const useMentionCategories = (): MentionCategory[] => {
           id: 'topic',
           icon: <Icon icon={MessageSquareText} size={16} />,
           items,
-          label: 'Topics',
+          label: t('mention.category.topics'),
         });
       }
     }
@@ -135,11 +137,12 @@ export const useMentionCategories = (): MentionCategory[] => {
           metadata: {
             actionCategory: item.category,
             actionType: item.type,
+            description: item.description,
             timestamp: 0,
             type: 'skill' as const,
           },
         })),
-        label: 'Skills',
+        label: t('mention.category.skills'),
       });
     }
 
@@ -156,11 +159,12 @@ export const useMentionCategories = (): MentionCategory[] => {
           metadata: {
             actionCategory: item.category,
             actionType: item.type,
+            description: item.description,
             timestamp: 0,
             type: 'tool' as const,
           },
         })),
-        label: 'Tools',
+        label: t('mention.category.tools'),
       });
     }
 
@@ -173,5 +177,6 @@ export const useMentionCategories = (): MentionCategory[] => {
     isGroupChat,
     externalMentionItems,
     enabledSkills,
+    t,
   ]);
 };

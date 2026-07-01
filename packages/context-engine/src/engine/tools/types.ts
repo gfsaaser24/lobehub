@@ -1,6 +1,12 @@
 import type { ExtendedHumanInterventionConfig } from '@/types/index';
 
 export interface LobeChatPluginApi {
+  /**
+   * Default execution timeout in milliseconds for this API.
+   * Falls back to the global default (120_000 ms) when omitted.
+   * The resolver reads this when the LLM does not supply `arguments.timeout`.
+   */
+  defaultTimeoutMs?: number;
   description: string;
   /**
    * Human intervention configuration
@@ -160,7 +166,7 @@ export interface UniformTool {
 
 // ---- Tool Lifecycle Types ----
 
-export type ToolSource = 'builtin' | 'client' | 'mcp' | 'klavis' | 'lobehubSkill';
+export type ToolSource = 'builtin' | 'client' | 'mcp' | 'composio' | 'lobehubSkill';
 
 /**
  * Where the tool is executed for a given invocation.

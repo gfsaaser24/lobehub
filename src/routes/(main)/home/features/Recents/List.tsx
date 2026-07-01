@@ -2,15 +2,15 @@ import { Flexbox } from '@lobehub/ui';
 import { MoreHorizontalIcon } from 'lucide-react';
 import { memo, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Link } from 'react-router-dom';
 
+import { taskDetailPath } from '@/features/AgentTasks/shared/taskDetailPath';
 import NavItem from '@/features/NavPanel/components/NavItem';
 import SkeletonList from '@/features/NavPanel/components/SkeletonList';
+import WorkspaceLink from '@/features/Workspace/WorkspaceLink';
 import { useGlobalStore } from '@/store/global';
 import { systemStatusSelectors } from '@/store/global/selectors';
 import { useHomeStore } from '@/store/home';
 import { homeRecentSelectors } from '@/store/home/selectors';
-import { featureFlagsSelectors, useServerConfigStore } from '@/store/serverConfig';
 
 import AllRecentsDrawer from './AllRecentsDrawer';
 import RecentListItem from './Item';
@@ -20,29 +20,21 @@ const RecentsList = memo(() => {
   const recents = useHomeStore(homeRecentSelectors.recents);
   const isInit = useHomeStore(homeRecentSelectors.isRecentsInit);
   const recentPageSize = useGlobalStore(systemStatusSelectors.recentPageSize);
-  const { enableAgentTask } = useServerConfigStore(featureFlagsSelectors);
   const [drawerOpen, openDrawer, closeDrawer] = useHomeStore((s) => [
     s.allRecentsDrawerOpen,
     s.openAllRecentsDrawer,
     s.closeAllRecentsDrawer,
   ]);
 
-  const filteredRecents = useMemo(
-    () => (enableAgentTask ? recents : recents.filter((item) => item.type !== 'task')),
-    [recents, enableAgentTask],
-  );
-  const displayItems = useMemo(
-    () => filteredRecents.slice(0, recentPageSize),
-    [filteredRecents, recentPageSize],
-  );
-  const hasMore = filteredRecents.length > recentPageSize;
+  const displayItems = useMemo(() => recents.slice(0, recentPageSize), [recents, recentPageSize]);
+  const hasMore = recents.length > recentPageSize;
 
   const getRecentRoute = useCallback((item: (typeof displayItems)[number]) => {
     if (item.type !== 'task') return item.routePath;
     const taskId = item.id;
     if (!taskId) return item.routePath;
 
-    return `/task/${taskId}`;
+    return taskDetailPath(taskId, item.agentId ?? undefined);
   }, []);
 
   if (!isInit) {
@@ -50,15 +42,15 @@ const RecentsList = memo(() => {
   }
 
   return (
-    <Flexbox gap={2}>
+    <Flexbox gap={1}>
       {displayItems.map((item) => (
-        <Link
+        <WorkspaceLink
           key={`${item.type}-${item.id}`}
           style={{ color: 'inherit', textDecoration: 'none' }}
           to={getRecentRoute(item)}
         >
           <RecentListItem {...item} />
-        </Link>
+        </WorkspaceLink>
       ))}
       {hasMore && (
         <NavItem icon={MoreHorizontalIcon} title={t('input.more')} onClick={openDrawer} />

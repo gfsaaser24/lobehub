@@ -2,7 +2,16 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { getTestDB } from '../../core/getTestDB';
-import { agents, chatGroups, documents, knowledgeBases, tasks, topics, users } from '../../schemas';
+import {
+  agents,
+  chatGroups,
+  documents,
+  knowledgeBases,
+  messages,
+  tasks,
+  topics,
+  users,
+} from '../../schemas';
 import type { LobeChatDatabase } from '../../type';
 import { RecentModel } from '../recent';
 
@@ -63,7 +72,7 @@ describe('RecentModel', () => {
 
       const result = await recentModel.queryRecent();
       expect(result).toHaveLength(1);
-      expect(result[0]).toMatchObject({ id: 'topic-mine', type: 'topic' });
+      expect(result[0]).toMatchObject({ id: 'topic-mine', type: 'topic', status: null });
     });
 
     describe('topics arm', () => {
@@ -102,6 +111,41 @@ describe('RecentModel', () => {
           routeId: 'agent-inbox',
           routeGroupId: null,
         });
+      });
+
+      it('orders topic rows by latest message activity', async () => {
+        await serverDB.insert(agents).values({ id: 'agent-activity', userId, virtual: false });
+        await serverDB.insert(topics).values([
+          {
+            agentId: 'agent-activity',
+            id: 'topic-old-row-latest-message',
+            title: 'latest message wins',
+            updatedAt: minutesAgo(30),
+            userId,
+          },
+          {
+            agentId: 'agent-activity',
+            id: 'topic-new-row-old-message',
+            title: 'newer topic row',
+            updatedAt: minutesAgo(5),
+            userId,
+          },
+        ]);
+        await serverDB.insert(messages).values({
+          id: 'recent-topic-latest-message',
+          role: 'user',
+          topicId: 'topic-old-row-latest-message',
+          updatedAt: now(),
+          userId,
+        });
+
+        const result = await recentModel.queryRecent();
+
+        expect(result.map((row) => row.id)).toEqual([
+          'topic-old-row-latest-message',
+          'topic-new-row-old-message',
+        ]);
+        expect(result[0].updatedAt.getTime()).toBeGreaterThan(result[1].updatedAt.getTime());
       });
 
       it('includes topics on non-virtual non-group agents', async () => {
@@ -242,6 +286,7 @@ describe('RecentModel', () => {
 
         const result = await recentModel.queryRecent();
         expect(result.map((r) => r.id)).toEqual(['doc-api']);
+        expect(result[0].status).toBeNull();
       });
 
       it('excludes file uploads (sourceType "file")', async () => {
@@ -252,6 +297,28 @@ describe('RecentModel', () => {
           updatedAt: now(),
           ...baseDocFields,
         });
+
+        const result = await recentModel.queryRecent();
+        expect(result).toEqual([]);
+      });
+
+      it('excludes agent-owned document rows', async () => {
+        await serverDB.insert(documents).values([
+          {
+            id: 'doc-agent',
+            userId,
+            sourceType: 'agent',
+            updatedAt: minutesAgo(1),
+            ...baseDocFields,
+          },
+          {
+            id: 'doc-agent-signal',
+            userId,
+            sourceType: 'agent-signal',
+            updatedAt: now(),
+            ...baseDocFields,
+          },
+        ]);
 
         const result = await recentModel.queryRecent();
         expect(result).toEqual([]);
@@ -340,7 +407,34 @@ describe('RecentModel', () => {
           title: 'Active Task',
           routeId: 'agent-assignee',
           routeGroupId: null,
+          status: 'running',
         });
+      });
+
+      it('surfaces task status so home can render the icon without a second task.detail call', async () => {
+        await serverDB.insert(tasks).values([
+          {
+            id: 'task-paused',
+            createdByUserId: userId,
+            identifier: 'T-P',
+            status: 'paused',
+            updatedAt: minutesAgo(2),
+            ...baseTaskFields,
+          },
+          {
+            id: 'task-pending',
+            createdByUserId: userId,
+            identifier: 'T-Q',
+            status: 'pending',
+            updatedAt: minutesAgo(1),
+            ...baseTaskFields,
+          },
+        ]);
+
+        const result = await recentModel.queryRecent();
+        const byId = Object.fromEntries(result.map((r) => [r.id, r.status]));
+        expect(byId['task-paused']).toBe('paused');
+        expect(byId['task-pending']).toBe('pending');
       });
 
       it('excludes completed and canceled tasks', async () => {

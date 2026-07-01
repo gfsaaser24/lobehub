@@ -155,8 +155,48 @@ describe('GoogleGenerativeAIStream', () => {
         `data: "STOP"\n\n`,
         'id: chat_E5M9dFKw\n',
         'event: usage\n',
-        `data: {"inputCachedTokens":0,"inputImageTokens":0,"inputTextTokens":0,"outputImageTokens":0,"outputTextTokens":0,"totalInputTokens":0,"totalOutputTokens":0,"totalTokens":0}\n\n`,
+        `data: {"inputCacheMissTokens":0,"inputCachedTokens":0,"inputImageTokens":0,"inputTextTokens":0,"outputImageTokens":0,"outputTextTokens":0,"totalInputTokens":0,"totalOutputTokens":0,"totalTokens":0}\n\n`,
       ]);
+    });
+
+    it('should expose missing usage diagnostics when finishReason has no usageMetadata', async () => {
+      vi.spyOn(uuidModule, 'nanoid').mockReturnValueOnce('missingUsage');
+      const mockGoogleStream = new ReadableStream({
+        start(controller) {
+          controller.enqueue({
+            candidates: [
+              {
+                content: { parts: [{ text: '' }], role: 'model' },
+                finishReason: 'STOP',
+                index: 0,
+              },
+            ],
+            modelVersion: 'gemini-test',
+          } as unknown as GenerateContentResponse);
+          controller.close();
+        },
+      });
+      const onFinal = vi.fn();
+
+      const protocolStream = GoogleGenerativeAIStream(mockGoogleStream, {
+        callbacks: { onFinal },
+        payload: { model: 'gemini-3.1-flash-lite', provider: 'google' },
+      });
+
+      await decodeStreamChunks(protocolStream);
+
+      expect(onFinal).toHaveBeenCalledWith(
+        expect.objectContaining({
+          usageMissingDiagnostics: {
+            finishReason: 'STOP',
+            hasUsageMetadata: false,
+            model: 'gemini-3.1-flash-lite',
+            provider: 'google',
+            source: 'google_generative_ai',
+            terminalEventType: 'GenerateContentResponse.candidates.finishReason',
+          },
+        }),
+      );
     });
 
     it('should return undefined data without text', async () => {
@@ -567,7 +607,7 @@ describe('GoogleGenerativeAIStream', () => {
         // usage
         'id: chat_1\n',
         'event: usage\n',
-        `data: {"inputCacheMissTokens":1439,"inputCachedTokens":14286,"inputTextTokens":15725,"outputImageTokens":0,"outputTextTokens":1053,"totalInputTokens":15725,"totalOutputTokens":1053,"totalTokens":16778}\n\n`,
+        `data: {"inputCachedTextTokens":14286,"inputCacheMissTokens":1439,"inputCachedTokens":14286,"inputTextTokens":15725,"outputImageTokens":0,"outputTextTokens":1053,"totalInputTokens":15725,"totalOutputTokens":1053,"totalTokens":16778}\n\n`,
       ]);
     });
 
@@ -1391,7 +1431,7 @@ describe('GoogleGenerativeAIStream', () => {
                 parts: [
                   {
                     functionCall: {
-                      name: 'lobe-gtd____createPlan',
+                      name: 'lobe-agent____createPlan',
                       args: {
                         goal: 'Fix Linear API Argument Validation Error',
                         description: 'Investigate the Linear API error.',
@@ -1424,7 +1464,7 @@ describe('GoogleGenerativeAIStream', () => {
                 parts: [
                   {
                     functionCall: {
-                      name: 'lobe-gtd____createTodos',
+                      name: 'lobe-agent____createTodos',
                       args: {
                         adds: [
                           'Verify Linear GraphQL API requirements',
@@ -1498,12 +1538,12 @@ describe('GoogleGenerativeAIStream', () => {
           // First tool call (createPlan)
           'id: chat_test',
           'event: tool_calls',
-          'data: [{"function":{"arguments":"{\\"goal\\":\\"Fix Linear API Argument Validation Error\\",\\"description\\":\\"Investigate the Linear API error.\\",\\"context\\":\\"The user is encountering a validation error.\\"}","name":"lobe-gtd____createPlan"},"id":"lobe-gtd____createPlan_0_tool_id_1","index":0,"thoughtSignature":"EoIYCv8XAXLI2nx+C18votz5l0A...","type":"function"}]\n',
+          'data: [{"function":{"arguments":"{\\"goal\\":\\"Fix Linear API Argument Validation Error\\",\\"description\\":\\"Investigate the Linear API error.\\",\\"context\\":\\"The user is encountering a validation error.\\"}","name":"lobe-agent____createPlan"},"id":"lobe-agent____createPlan_0_tool_id_1","index":0,"thoughtSignature":"EoIYCv8XAXLI2nx+C18votz5l0A...","type":"function"}]\n',
 
           // Second tool call (createTodos) - should be a SEPARATE event with index:0
           'id: chat_test',
           'event: tool_calls',
-          'data: [{"function":{"arguments":"{\\"adds\\":[\\"Verify Linear GraphQL API requirements\\",\\"Determine if code needs to look up Team UUID\\",\\"Provide corrected code\\"]}","name":"lobe-gtd____createTodos"},"id":"lobe-gtd____createTodos_0_tool_id_2","index":0,"type":"function"}]\n',
+          'data: [{"function":{"arguments":"{\\"adds\\":[\\"Verify Linear GraphQL API requirements\\",\\"Determine if code needs to look up Team UUID\\",\\"Provide corrected code\\"]}","name":"lobe-agent____createTodos"},"id":"lobe-agent____createTodos_0_tool_id_2","index":0,"type":"function"}]\n',
 
           // Stop and usage
           'id: chat_test',

@@ -78,7 +78,7 @@ describe('builtinToolSelectors', () => {
   });
 
   describe('metaListIncludingHidden', () => {
-    it('should keep task tools hidden from manual tool selection', () => {
+    it('should surface hidden tools so users can toggle them', () => {
       const state = {
         ...initialState,
         builtinTools: [
@@ -106,12 +106,80 @@ describe('builtinToolSelectors', () => {
       const result = builtinToolSelectors.metaListIncludingHidden(state);
 
       expect(result.map((item) => item.identifier)).toContain('tool-1');
-      expect(result.map((item) => item.identifier)).not.toContain('lobe-task');
+      expect(result.map((item) => item.identifier)).toContain('lobe-task');
+    });
+  });
+
+  describe('fixedDisplayMetaList', () => {
+    const fixedState = {
+      ...initialState,
+      builtinTools: [
+        {
+          hidden: true,
+          identifier: 'lobe-agent',
+          manifest: {
+            api: [],
+            identifier: 'lobe-agent',
+            meta: { avatar: '🤖', title: 'Lobe Agent' },
+            systemRole: '',
+          },
+          type: 'builtin',
+        },
+        {
+          discoverable: false,
+          hidden: true,
+          identifier: 'lobe-activator',
+          manifest: { api: [], identifier: 'lobe-activator', meta: {}, systemRole: '' },
+          type: 'builtin',
+        },
+        {
+          hidden: true,
+          identifier: 'lobe-skill-store',
+          manifest: { api: [], identifier: 'lobe-skill-store', meta: {}, systemRole: '' },
+          type: 'builtin',
+        },
+        {
+          hidden: true,
+          identifier: 'tool-1',
+          manifest: { api: [], identifier: 'tool-1', meta: { title: 'Tool 1' }, systemRole: '' },
+          type: 'builtin',
+        },
+      ],
+      uninstalledBuiltinTools: [],
+    } as ToolStoreState;
+
+    it('should surface app-fixed tools (e.g. lobe-agent) even though they are hidden', () => {
+      const result = builtinToolSelectors.fixedDisplayMetaList()(fixedState);
+
+      // Only fixed-display ids are returned; lobe-agent leads the list, unrelated tools excluded.
+      expect(result.map((item) => item.identifier)).toContain('lobe-agent');
+      expect(result.map((item) => item.identifier)).not.toContain('tool-1');
+      expect(result[0].identifier).toBe('lobe-agent');
+    });
+
+    it('should drop manual-mode-excluded discovery tools in manual mode', () => {
+      const result = builtinToolSelectors.fixedDisplayMetaList({ isManualMode: true })(fixedState);
+      const ids = result.map((item) => item.identifier);
+
+      // activator + skill-store are stripped from defaults in manual mode, so they aren't on.
+      expect(ids).not.toContain('lobe-activator');
+      expect(ids).not.toContain('lobe-skill-store');
+      // lobe-agent stays on in manual mode.
+      expect(ids).toContain('lobe-agent');
+    });
+
+    it('should skip fixed ids that are not registered in builtinTools', () => {
+      const state = {
+        ...initialState,
+        builtinTools: [],
+      } as unknown as ToolStoreState;
+
+      expect(builtinToolSelectors.fixedDisplayMetaList()(state)).toEqual([]);
     });
   });
 
   describe('installedAllMetaList', () => {
-    it('should keep task tools out of agent profile configuration', () => {
+    it('should include all non-uninstalled tools in agent profile configuration', () => {
       const state = {
         ...initialState,
         builtinTools: [
@@ -138,7 +206,7 @@ describe('builtinToolSelectors', () => {
 
       const result = builtinToolSelectors.installedAllMetaList(state);
 
-      expect(result.map((item) => item.identifier)).toEqual(['tool-1']);
+      expect(result.map((item) => item.identifier)).toEqual(['lobe-task', 'tool-1']);
     });
   });
 });

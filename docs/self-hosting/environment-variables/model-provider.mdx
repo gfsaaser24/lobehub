@@ -167,6 +167,13 @@ If you need to use Azure OpenAI to provide model services, you can refer to the 
 - Default: `https://api.anthropic.com`
 - Example: `https://my-anthropic-proxy.com`
 
+### `ANTHROPIC_CLIENT_TIMEOUT`
+
+- Type: Optional
+- Description: Anthropic SDK client request timeout in milliseconds. This timeout is also used by Anthropic-compatible providers that rely on the Anthropic SDK.
+- Default: `295000`
+- Example: `780000`
+
 ## AWS Bedrock
 
 ### `ENABLED_AWS_BEDROCK`
@@ -819,6 +826,13 @@ NewAPI is a multi-provider model aggregation service that supports automatic mod
 - Description: This is the API key you applied for in the AiHubMix service.
 - Default: -
 - Example: `sk-xxxxxx...xxxxxx`
+
+### `AIHUBMIX_PROXY_URL`
+
+- Type: Optional
+- Description: The base URL of the AiHubMix gateway. Point this at a mirror or backup endpoint; defaults to the official gateway when unset.
+- Default: `https://aihubmix.com`
+- Example: `https://your-aihubmix-endpoint.com`
 
 ### `AIHUBMIX_MODEL_LIST`
 

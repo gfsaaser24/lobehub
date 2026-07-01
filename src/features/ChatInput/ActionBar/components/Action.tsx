@@ -6,6 +6,7 @@ import { isUndefined } from 'es-toolkit/compat';
 import { memo } from 'react';
 import useMergeState from 'use-merge-value';
 
+import { usePermission } from '@/hooks/usePermission';
 import { useServerConfigStore } from '@/store/serverConfig';
 
 import { useActionBarContext } from '../context';
@@ -36,6 +37,7 @@ const Action = memo<ActionProps>(
     trigger,
     disabled,
     onClick,
+    size,
     ...rest
   }) => {
     const [show, setShow] = useMergeState(false, {
@@ -44,33 +46,43 @@ const Action = memo<ActionProps>(
     });
     const mobile = useServerConfigStore((s) => s.isMobile);
     const { actionSize, dropdownPlacement } = useActionBarContext();
+    const { allowed: canUseChatInputAction, reason } = usePermission('create_content');
+    const blocked = disabled || !canUseChatInputAction;
+    const tooltipTitle = canUseChatInputAction ? title : reason;
     const iconNode = (
       <ActionIcon
-        disabled={disabled}
+        disabled={blocked}
         icon={icon}
         loading={loading}
         title={
-          isUndefined(showTooltip) ? (mobile ? undefined : title) : showTooltip ? title : undefined
+          isUndefined(showTooltip)
+            ? mobile
+              ? undefined
+              : tooltipTitle
+            : showTooltip
+              ? tooltipTitle
+              : undefined
         }
         tooltipProps={{
           placement: 'bottom',
         }}
         onClick={(e) => {
-          if (disabled || loading) return;
+          if (blocked || loading) return;
           if (onClick) return onClick(e);
           setShow(true);
         }}
         {...rest}
         size={
-          actionSize ?? {
-            blockSize: 36,
-            size: 20,
+          actionSize ??
+          size ?? {
+            blockSize: 32,
+            size: 18,
           }
         }
       />
     );
 
-    if (disabled) return iconNode;
+    if (blocked) return iconNode;
 
     if (dropdown)
       return (

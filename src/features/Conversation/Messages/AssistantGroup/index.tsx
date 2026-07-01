@@ -1,23 +1,37 @@
 'use client';
 
-import type { AssistantContentBlock, EmojiReaction } from '@lobechat/types';
+import type { AssistantContentBlock, EmojiReaction, UISignalCallbacksBlock } from '@lobechat/types';
+import { Flexbox, Tag } from '@lobehub/ui';
 import isEqual from 'fast-deep-equal';
-import type { MouseEventHandler } from 'react';
+import type { MouseEventHandler, ReactNode } from 'react';
 import { memo, Suspense, useCallback, useMemo } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { MESSAGE_ACTION_BAR_PORTAL_ATTRIBUTES } from '@/const/messageActionPortal';
+import AgentGroupAvatar from '@/features/AgentGroupAvatar';
 import { ChatItem } from '@/features/Conversation/ChatItem';
 import { useOpenChatSettings } from '@/hooks/useInterceptingRoutes';
 import dynamic from '@/libs/next/dynamic';
 import { useAgentStore } from '@/store/agent';
 import { builtinAgentSelectors } from '@/store/agent/selectors';
+import { useAgentGroupStore } from '@/store/agentGroup';
+import { agentGroupSelectors } from '@/store/agentGroup/selectors';
 import { useGlobalStore } from '@/store/global';
 import { useUserStore } from '@/store/user';
-import { userGeneralSettingsSelectors, userProfileSelectors } from '@/store/user/selectors';
+import {
+  labPreferSelectors,
+  userGeneralSettingsSelectors,
+  userProfileSelectors,
+} from '@/store/user/selectors';
 
 import { ReactionDisplay } from '../../components/Reaction';
 import { useAgentMeta } from '../../hooks';
-import { dataSelectors, messageStateSelectors, useConversationStore } from '../../store';
+import {
+  contextSelectors,
+  dataSelectors,
+  messageStateSelectors,
+  useConversationStore,
+} from '../../store';
 import InterruptedHint from '../Assistant/components/InterruptedHint';
 import Usage from '../components/Extras/Usage';
 import MessageBranch from '../components/MessageBranch';
@@ -25,6 +39,7 @@ import {
   useSetMessageItemActionElementPortialContext,
   useSetMessageItemActionTypeContext,
 } from '../Contexts/message-action-context';
+import SignalCallbacks from '../SignalCallbacks';
 import FileListViewer from '../User/components/FileListViewer';
 import Group from './components/Group';
 import type { WorkflowExpandLevelDefault } from './components/WorkflowCollapse';
@@ -42,19 +57,44 @@ const actionBarHolder = (
 interface GroupMessageProps {
   defaultWorkflowExpandLevel?: WorkflowExpandLevelDefault;
   disableEditing?: boolean;
+  footerRender?: ReactNode;
   id: string;
   index: number;
   isLatestItem?: boolean;
 }
 
 const GroupMessage = memo<GroupMessageProps>(
-  ({ defaultWorkflowExpandLevel, id, index, disableEditing }) => {
+  ({ defaultWorkflowExpandLevel, id, index, disableEditing, footerRender, isLatestItem }) => {
     // Get message and actionsConfig from ConversationStore
     const item = useConversationStore(dataSelectors.getDisplayMessageById(id), isEqual)!;
 
-    const { agentId, usage, createdAt, children, performance, model, provider, branch, metadata } =
-      item;
+    const {
+      agentId,
+      usage,
+      createdAt,
+      children,
+      performance,
+      model,
+      provider,
+      branch,
+      metadata,
+      signalCallbacks,
+      taskCompletions,
+    } = item;
     const avatar = useAgentMeta(agentId);
+
+    // Supervisor messages render the GROUP's identity (avatar + name + 主管 badge)
+    // rather than the supervisor agent's own bare meta (whose title is literally
+    // "Supervisor" with no avatar). The flag is a persisted snapshot on the
+    // message metadata; see metadata.orchestrationRole.
+    const isSupervisor = metadata?.orchestrationRole === 'supervisor' || !!metadata?.isSupervisor;
+    const groupId = useConversationStore(contextSelectors.groupId);
+    const groupMeta = useAgentGroupStore((s) => agentGroupSelectors.getGroupMeta(groupId ?? '')(s));
+    const memberAvatars = useAgentGroupStore(
+      (s) => agentGroupSelectors.getGroupMemberAvatars(groupId ?? '')(s),
+      isEqual,
+    );
+    const { t } = useTranslation('chat');
 
     // Collect fileList from all children blocks
     const aggregatedFileList = useMemo(() => {
@@ -85,6 +125,7 @@ const GroupMessage = memo<GroupMessageProps>(
     const interrupted = groupInterrupted || blockInterrupted;
 
     const isDevMode = useUserStore((s) => userGeneralSettingsSelectors.config(s).isDevMode);
+    const enableProcessFold = useUserStore(labPreferSelectors.enableFoldFinishedTurn);
     const addReaction = useConversationStore((s) => s.addReaction);
     const removeReaction = useConversationStore((s) => s.removeReaction);
     const userId = useUserStore(userProfileSelectors.userId)!;
@@ -140,9 +181,11 @@ const GroupMessage = memo<GroupMessageProps>(
     return (
       <ChatItem
         showTitle
-        avatar={avatar}
+        avatar={isSupervisor ? { ...avatar, title: groupMeta.title } : avatar}
+        id={id}
         placement={'left'}
         time={createdAt}
+        titleAddon={isSupervisor ? <Tag>{t('supervisor.label')}</Tag> : undefined}
         actions={
           !disableEditing && (
             <>
@@ -157,20 +200,57 @@ const GroupMessage = memo<GroupMessageProps>(
             </>
           )
         }
+        customAvatarRender={
+          isSupervisor
+            ? () => (
+                <AgentGroupAvatar
+                  avatar={groupMeta.avatar}
+                  backgroundColor={groupMeta.backgroundColor}
+                  memberAvatars={memberAvatars}
+                />
+              )
+            : undefined
+        }
         onAvatarClick={onAvatarClick}
         onMouseEnter={onMouseEnter}
       >
-        {children && children.length > 0 && (
-          <Group
-            blocks={children}
-            content={lastAssistantMsg?.content}
-            contentId={contentId}
-            defaultWorkflowExpandLevel={defaultWorkflowExpandLevel}
-            disableEditing={disableEditing}
-            id={id}
-            messageIndex={index}
-          />
-        )}
+        {/*
+          Wrap main chain + signal callbacks + post-task summary in a tight
+          flex stack so the SignalCallbacks accordion sits visually inside
+          the same "agent reply" block. The ChatItem body gap (16px) would
+          otherwise stretch them apart and the natural narrative — initial
+          reply → callbacks → summary — reads as three disconnected
+          sections ().
+        */}
+        <Flexbox gap={4}>
+          {children && children.length > 0 && (
+            <Group
+              blocks={children}
+              content={lastAssistantMsg?.content}
+              contentId={contentId}
+              defaultWorkflowExpandLevel={defaultWorkflowExpandLevel}
+              disableEditing={disableEditing}
+              enableProcessFold={enableProcessFold}
+              id={id}
+              isLatestItem={isLatestItem}
+              messageIndex={index}
+            />
+          )}
+          {(signalCallbacks as UISignalCallbacksBlock[] | undefined)?.map((block) => (
+            <SignalCallbacks block={block} key={block.sourceToolMessageId} />
+          ))}
+          {taskCompletions && taskCompletions.length > 0 && (
+            <Group
+              blocks={taskCompletions}
+              contentId={taskCompletions.at(-1)?.id}
+              defaultWorkflowExpandLevel={defaultWorkflowExpandLevel}
+              disableEditing={disableEditing}
+              id={id}
+              messageIndex={index}
+            />
+          )}
+        </Flexbox>
+
         {aggregatedFileList.length > 0 && (
           <div style={{ marginTop: 8 }}>
             <FileListViewer items={aggregatedFileList} />
@@ -180,6 +260,7 @@ const GroupMessage = memo<GroupMessageProps>(
         {isDevMode && model && (
           <Usage model={model} performance={performance} provider={provider!} usage={usage} />
         )}
+        {footerRender}
         {reactions.length > 0 && (
           <ReactionDisplay
             isActive={isReactionActive}

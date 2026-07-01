@@ -1,4 +1,4 @@
-import { type NavigateFunction } from 'react-router-dom';
+import { type NavigateFunction } from 'react-router';
 
 import { type MigrationSQL, type MigrationTableItem } from '@/types/clientDB';
 import { DatabaseLoadingState } from '@/types/clientDB';
@@ -22,13 +22,11 @@ export enum SidebarTabKey {
 }
 
 export enum ChatSettingsTabs {
-  Chat = 'chat',
-  Documents = 'documents',
-  Meta = 'meta',
-  Modal = 'modal',
+  Connector = 'connector',
   Opening = 'opening',
   Plugin = 'plugin',
   Prompt = 'prompt',
+  SelfIteration = 'selfIteration',
   TTS = 'tts',
 }
 
@@ -37,6 +35,8 @@ export enum GroupSettingsTabs {
   Members = 'members',
   Settings = 'settings',
 }
+
+export type WorkingSidebarTab = 'files' | 'params' | 'resources' | 'review';
 
 export enum SettingsTabs {
   About = 'about',
@@ -52,11 +52,13 @@ export enum SettingsTabs {
   Common = 'common',
   Credits = 'credits',
   Creds = 'creds',
+  Devices = 'devices',
   Hotkey = 'hotkey',
   /** @deprecated Use ServiceModel instead */
   Image = 'image',
   LLM = 'llm',
   Memory = 'memory',
+  Messenger = 'messenger',
   Notification = 'notification',
   // business
   Plans = 'plans',
@@ -102,6 +104,8 @@ export const DEFAULT_MODEL_DETAIL_PANEL_EXPANDED_KEYS = [
   'config',
 ] as const satisfies readonly ModelDetailPanelExpandedKey[];
 
+export const DEFAULT_HOME_SIDEBAR_EXPANDED_KEYS = ['recents', 'agent'];
+
 export interface SystemStatus {
   /**
    * Agent Builder panel width
@@ -119,6 +123,14 @@ export interface SystemStatus {
    * so dismissing the current one does not hide future ones.
    */
   dismissedBannerIds?: string[];
+  /**
+   * Per-agent expanded state of the agent sidebar's top-level sections
+   * (Tasks / Topic), keyed by agentId. Lets each agent remember its own
+   * collapse/expand state so switching agents doesn't share one accordion.
+   * Nested booleans (not a key array) so the lodash `merge` in
+   * `updateSystemStatus` replaces scalars cleanly instead of index-merging arrays.
+   */
+  expandAgentSidebarSectionsByAgent?: Record<string, Record<string, boolean>>;
   expandInputActionbar?: boolean;
   // which sessionGroup should expand
   expandSessionGroupKeys: string[];
@@ -200,8 +212,19 @@ export interface SystemStatus {
     name: number;
     size: number;
   };
+  /**
+   * Visibility of the Agent profile right-side Agent Builder panel.
+   * Independent from `showRightPanel` so builder creation flows do not affect chat pages.
+   */
+  showAgentBuilderPanel?: boolean;
   showCommandMenu?: boolean;
   showFilePanel?: boolean;
+  /**
+   * Collapse state of the nav panel while the Fleet (Observation Mode) view is active.
+   * Persisted independently from `showLeftPanel` so collapsing the running-task list
+   * does not carry over to / from the standard chat nav rail (and vice versa).
+   */
+  showFleetPanel?: boolean;
   showHotkeyHelper?: boolean;
   showImagePanel?: boolean;
   showImageTopicPanel?: boolean;
@@ -223,6 +246,7 @@ export interface SystemStatus {
   /**
    * Flat ordered list of sidebar items.
    */
+  sidebarExpandedKeys?: string[];
   sidebarItems?: string[];
   /**
    * Legacy accordion-only ordering (recents/agent) from the pre-rework sidebar.
@@ -263,7 +287,13 @@ export interface SystemStatus {
   videoPanelWidth: number;
   videoTopicPanelWidth?: number;
   videoTopicViewMode?: 'grid' | 'list';
-  zenMode?: boolean;
+  workingSidebarRevealRequest?: { nonce: number; path: string };
+  /**
+   * Active tab inside the agent chat right-side WorkingSidebar.
+   * Lifted to global so external triggers (e.g. the diff badge in the input bar)
+   * can switch the panel to "review" when revealing the right panel.
+   */
+  workingSidebarTab?: WorkingSidebarTab;
 }
 
 export interface GlobalNavigationRef {
@@ -353,23 +383,25 @@ export const INITIAL_STATUS = {
   },
   showCommandMenu: false,
   showFilePanel: true,
+  showFleetPanel: true,
   showHotkeyHelper: false,
   showImagePanel: true,
   showImageTopicPanel: true,
+  showAgentBuilderPanel: false,
   showLeftPanel: true,
   showPageAgentPanel: true,
-  showRightPanel: true,
+  showRightPanel: false,
   showSystemRole: false,
   showTaskAgentPanel: false,
   showVideoPanel: true,
   showVideoTopicPanel: true,
+  sidebarExpandedKeys: [...DEFAULT_HOME_SIDEBAR_EXPANDED_KEYS],
   systemRoleExpandedMap: {},
   tokenDisplayFormatShort: true,
   topicPageSize: 20,
   videoPanelWidth: 320,
   videoTopicViewMode: 'grid' as const,
   videoTopicPanelWidth: 80,
-  zenMode: false,
 } satisfies SystemStatus;
 
 export const initialState: GlobalState = {
